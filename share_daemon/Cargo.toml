@@ -1,0 +1,23 @@
+[package]
+name = "share_daemon"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fshare_server"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "share_daemon"
+path = "src/main.rs"
+
+[dependencies]
+
+
+
+[target.x86_64-pc-windows-msvc.dependencies]
+windows-sys = { version = "0.52.0", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+] }

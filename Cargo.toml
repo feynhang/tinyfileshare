@@ -1,0 +1,3 @@
+[workspace]
+members = ["share", "share_daemon"]
+resolver = "2"
