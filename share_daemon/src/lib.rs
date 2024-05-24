@@ -16,7 +16,7 @@ fn get_home_path() -> String {
 
 #[cfg(not(windows))]
 fn get_home_path() -> String {
-    std::env::var("$HOME").unwrap()
+    std::env::var("HOME").unwrap()
 }
 
 pub fn port() -> u16 {

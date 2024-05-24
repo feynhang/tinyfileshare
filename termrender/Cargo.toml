@@ -1,0 +1,12 @@
+[package]
+name = "termrender"
+version = "0.1.0"
+edition = "2021"
+
+
+[dev-dependencies]
+ctrlc = { version = "3.4" }
+
+[dependencies]
+crossterm = "*"
+compact_str = "*"
