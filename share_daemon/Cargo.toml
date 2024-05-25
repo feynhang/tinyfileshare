@@ -12,9 +12,17 @@ crate-type = ["rlib"]
 name = "share_daemon"
 path = "src/main.rs"
 
+
+[features]
+file_log = []
+# console_log = []
+
 [dependencies]
-
-
+uuid = {version = "*", features = ["v4", "fast-rng"] }
+serde = { version = "*", features = ["derive"]}
+crossbeam = "*"
+toml = "*"
+chrono = "*"
 
 [target.x86_64-pc-windows-msvc.dependencies]
 windows-sys = { version = "0.52.0", features = [

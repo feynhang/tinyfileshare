@@ -9,4 +9,3 @@ ctrlc = { version = "3.4" }
 
 [dependencies]
 crossterm = "*"
-compact_str = "*"

@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use compact_str::{format_compact, CompactString};
 use crossterm::{cursor, style::Print, QueueableCommand};
 
 pub(crate) fn stdout() -> &'static mut Stdout {
@@ -88,7 +87,7 @@ where
 
     while current_progress <= 1.0 {
         if show_percent {
-            let percent = format_compact!("{}", (current_progress * 100.0) as u16);
+            let percent = format!("{}", (current_progress * 100.0) as u16);
             stdout()
                 .queue(cursor::MoveToColumn(percent_start_col))
                 .unwrap()
@@ -123,7 +122,7 @@ where
     Ok(())
 }
 
-pub(crate) fn repeat_byte(ch: u8, times: u16) -> CompactString {
+pub(crate) fn repeat_byte(ch: u8, times: u16) -> String {
     let bytes: Vec<u8> = std::iter::repeat(ch).take(times as usize).collect();
-    unsafe { CompactString::from_utf8_unchecked(bytes) }
+    unsafe { String::from_utf8_unchecked(bytes) }
 }

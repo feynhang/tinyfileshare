@@ -3,6 +3,8 @@ use std::{
     net::SocketAddr,
 };
 
+mod client;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.len() {
@@ -45,15 +47,19 @@ fn main() {
     }
 }
 
-fn send_file_paths<'a>(file_paths: impl Iterator<Item = &'a String>) -> Result<(), SendError> {
-    let port = fshare_server::port();
+fn read_port() -> u16 {
+    todo!()
+}
+
+fn send_file_paths<T: AsRef<str>>(file_paths: impl Iterator<Item = T>) -> Result<(), SendError> {
+    let port = read_port();
     let conn_res = std::net::TcpStream::connect(SocketAddr::new(fshare_server::LOCALHOST, port));
     if conn_res.is_err() {
         Err(SendError::ConnectionError(conn_res.unwrap_err()))
     } else {
         let mut writer = BufWriter::new(conn_res.unwrap());
         for file_path in file_paths {
-            writer.write_fmt(format_args!("{}\n", file_path)).unwrap();
+            writer.write_fmt(format_args!("{}\n", file_path.as_ref())).unwrap();
         }
         if let Err(e) = writer.flush() {
             return Err(SendError::StreamWriteError(e));
