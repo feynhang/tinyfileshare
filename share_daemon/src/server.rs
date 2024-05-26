@@ -1,90 +1,83 @@
 use std::{
-    net::{SocketAddr, TcpListener, ToSocketAddrs},
-    sync::OnceLock,
+    net::{SocketAddr, TcpListener},
+    path::{Path, PathBuf, MAIN_SEPARATOR},
 };
 
-use crossbeam::channel::{bounded, Sender};
+use crossbeam::channel::bounded;
 
 use crate::{
-    config::Config, dispatcher::Dispatcher, handler::PathHandler, workers::Workers, CommonResult,
+    config::Config, dispatcher::Dispatcher, error::ServerError, workers::Workers, ServerResult,
 };
 
-static mut SERVER: OnceLock<Server> = OnceLock::new();
-
-pub struct Server {
-    listener: TcpListener,
-    current_config: Config,
-    dispatcher: Dispatcher,
-    _workers: Workers,
-}
+pub struct Server;
 
 impl Server {
-    pub fn start_with_config(mut config: Config) -> CommonResult<()> {
-        let listener = TcpListener::bind((config.ip, config.port))?;
+    fn checked_path(path: &Path) -> ServerResult<&Path> {
+        const PATH_INVALID_CHAR: [char; 9] = ['\\', '*', '?', '/', '"', '<', '>', '|', ':'];
+        if path.is_symlink() {
+            return Err(ServerError::PathError(
+                "symbolic links for config path is not supported!",
+            ));
+        }
+        let invalid = path
+            .to_str()
+            .unwrap()
+            .split(MAIN_SEPARATOR)
+            .any(|part| part.chars().any(|ch| PATH_INVALID_CHAR.contains(&ch)));
+        if invalid {
+            return Err(ServerError::PathError("Invalid path!"));
+        }
+
+        Ok(path)
+    }
+
+    fn start_with_config(mut config: Config) -> ServerResult<()> {
+        let default_config = Config::default();
+        let listener;
+        let listen_res = TcpListener::bind((config.ip, config.port));
+        if let Err(e) = listen_res {
+            if config == default_config {
+                return Err(e.into());
+            }
+            config = default_config;
+            listener = TcpListener::bind((config.ip, config.port))?;
+        } else {
+            listener = listen_res.unwrap();
+        }
         let local_addr = listener.local_addr().unwrap();
         config.port = local_addr.port();
         config.ip = local_addr.ip();
         let num_workers = config.num_workers;
-        let chan_size = config.num_workers as usize + 1;
-        let (handler_tx, handler_rx) = bounded(chan_size);
-        let (data_tx, data_rx) = bounded(chan_size);
-        let server = unsafe {
-            SERVER.get_or_init(|| Self {
-                listener,
-                current_config: config,
-                dispatcher: Dispatcher::new(handler_tx, data_rx),
-                _workers: Workers::start(handler_rx, data_tx, num_workers),
-            })
-        };
-        while let Ok((stream, remote_addr)) = server.listener.accept() {
-            server.dispatcher.dispatch(stream, remote_addr);
+        config.store_to_file();
+        let (handler_tx, handler_rx) = bounded(num_workers as usize + 1);
+        let mut dispatcher = Dispatcher::new(handler_tx);
+        _ = Workers::start(handler_rx, num_workers);
+        while let Ok((stream, _)) = listener.accept() {
+            dispatcher.dispatch(stream)?;
         }
         Ok(())
     }
 
-    pub fn start_default() -> CommonResult<()> {
+    pub fn start_with_config_path(config_path: &Path) -> ServerResult<()> {
+        crate::global::set_config_path(Self::checked_path(config_path)?);
+        Self::start_with_config(Config::try_from(config_path)?)?;
+        Ok(())
+    }
+
+    pub fn start_default() -> ServerResult<()> {
         Self::start_with_config(Config::default())?;
         Ok(())
     }
 
-    pub fn start_on(addrs: SocketAddr) -> CommonResult<()> {
-        let mut current_config = Config::from_socket_addr(addrs);
-        if let Err(e) = Self::start_with_config(current_config) {
-            
-            Self::start_default()?
-        }
+    pub fn start_on(addr: SocketAddr) -> ServerResult<()> {
+        let current_config = Config {
+            ip: addr.ip(),
+            port: addr.port(),
+            ..Default::default()
+        };
+        Self::start_with_config(current_config)?;
         Ok(())
     }
-    // pub fn listen_on_port(port: u16) -> Self {
-    //     if let Ok(listener) = TcpListener::bind((Config::DEFAULT.ip, port)) {
-    //         Self {
-    //             listener,
-    //             current_config: Config {
-    //                 port,
-    //                 ..Config::DEFAULT
-    //             },
-    //         }
-    //     } else {
-    //         Self::listen_default()
-    //     }
-    // }
-
-    // pub fn listen_on<A: ToSocketAddrs>(addr: A) -> Self {
-    //     if let Ok(listener) = TcpListener::bind(addr) {
-    //         let local_addr = listener.local_addr().unwrap();
-    //         let current_config = Config {
-    //             port: local_addr.port(),
-    //             ip: local_addr.ip(),
-    //             ..Config::DEFAULT
-    //         };
-    //         Self {
-    //             listener,
-    //             current_config,
-    //         }
-    //     } else {
-    //         Self::listen_default()
-    //     }
-    // }
 }
 
 #[cfg(test)]

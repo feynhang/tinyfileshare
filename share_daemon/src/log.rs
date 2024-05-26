@@ -138,28 +138,3 @@ fn get_log_path(file_path: &std::path::Path) -> PathBuf {
     ));
     log_path
 }
-pub trait LoggingPath {
-    fn log_err<E: std::error::Error>(&self, err: E) -> std::io::Result<()>;
-}
-
-impl<T> LoggingPath for T
-where
-    T: AsRef<Path>,
-{
-    fn log_err<E: std::error::Error>(&self, err: E) -> std::io::Result<()> {
-        let log_path = get_log_path(self.as_ref());
-        let f = if log_path.exists() {
-            File::options().append(true).open(log_path)?
-        } else {
-            File::create(log_path)?
-        };
-        let mut writer = BufWriter::new(f);
-        writer.write_fmt(format_args!(
-            "Transfer of the file \"{}\" failed!\nDetail: {}",
-            self.as_ref().to_str().unwrap(),
-            err
-        ))?;
-        writer.flush()?;
-        Ok(())
-    }
-}

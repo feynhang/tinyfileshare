@@ -1,39 +1,57 @@
 use std::{
-    fs::File,
+    ffi::OsStr,
     io::Write,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
-use toml::Table;
+use crate::{error::ServerError, global, handler::PathHandler, ServerResult};
 
-use crate::handler::{PathHandler, ReadAll};
-
-pub(crate) const DEFAULT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
-pub(crate) const DEFAULT_IP_STR: &str = "0.0.0.0";
-pub(crate) const DEFAULT_PORT: u16 = 0;
+// pub(crate) const DEFAULT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+// pub(crate) const DEFAULT_IP_STR: &str = "0.0.0.0";
+pub(crate) const UNSPECIFIED_PORT: u16 = 0;
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 3;
 
-#[derive(serde::Serialize, Debug, Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+pub(crate) struct User {
+    pub(crate) name: String,
+    pub(crate) password: String,
+}
+
+impl<T> From<(T, T)> for User
+where
+    T: Into<String>,
+{
+    fn from((name, password): (T, T)) -> Self {
+        Self {
+            name: name.into(),
+            password: password.into(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Config {
     pub(crate) ip: IpAddr,
     pub(crate) port: u16,
     pub(crate) num_workers: u8,
     pub(crate) log_dir: PathBuf,
+    pub(crate) users: Vec<User>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self::new(
-            SocketAddr::new(DEFAULT_IP, DEFAULT_PORT),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT),
             0,
             PathHandler::get_default_log_dir().to_owned(),
+            vec![],
         )
     }
 }
 
 impl Config {
-    pub fn new(socket_addr: SocketAddr, num_workers: u8, log_dir: PathBuf) -> Self {
+    fn new(socket_addr: SocketAddr, num_workers: u8, log_dir: PathBuf, users: Vec<User>) -> Self {
         Self {
             ip: socket_addr.ip(),
             port: socket_addr.port(),
@@ -43,106 +61,115 @@ impl Config {
                 num_workers
             },
             log_dir,
+            users,
         }
     }
 
-    pub fn from_socket_addr(socket_addr: SocketAddr) -> Self {
-        Self::new(
-            socket_addr,
-            0,
-            PathHandler::get_default_log_dir().to_owned(),
-        )
+    #[allow(unused)]
+    pub(crate) fn add_user<T: Into<String>>(&mut self, name: T, password: T) {
+        self.users.push(User {
+            name: name.into(),
+            password: password.into(),
+        })
+    }
+
+    pub(crate) fn store_to_file(&self) -> ServerResult<()> {
+        let mut path: PathBuf = global::config_path().to_owned();
+        if !path.is_file() {
+            if !path.is_dir() && path.extension() != Some(OsStr::new("toml")) {
+                std::fs::create_dir_all(&path)?;
+            }
+            path.push(global::DEFAULT_CONFIG_FILE_NAME);
+        }
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(
+            toml::to_string(&self)
+                .expect("config serialize to toml failed!")
+                .as_bytes(),
+        )?;
+        f.flush()?;
+        Ok(())
     }
 }
 
 impl TryFrom<&Path> for Config {
-    type Error = Box<dyn std::error::Error>;
+    type Error = ServerError;
 
-    fn try_from(config_file_path: &Path) -> Result<Self, Self::Error> {
-        let mut f = File::open(config_file_path)?;
-        let config_str = String::from_utf8(f.read_all()?)?;
-        let config_dict = config_str.parse::<Table>()?;
-        let ip: IpAddr =
-            if let Ok(ip_addr) = config_dict["addr"].as_str().unwrap_or(DEFAULT_IP_STR).parse() {
-                ip_addr
-            } else {
-                DEFAULT_IP
-            };
-        let port: u16 = if let Ok(v) = config_dict["port"]
-            .as_integer()
-            .unwrap_or(DEFAULT_PORT as i64)
-            .try_into()
-        {
-            v
-        } else {
-            DEFAULT_PORT
-        };
-        let num_workers: u8 = if let Ok(num) = config_dict["num_workers"]
-            .as_integer()
-            .unwrap_or(DEFAULT_NUM_WORKERS as i64)
-            .try_into()
-        {
-            num
-        } else {
-            DEFAULT_NUM_WORKERS
-        };
-        let log_dir: PathBuf = if let Ok(log_dir_path) = config_dict["log_dir"]
-            .as_str()
-            .unwrap_or(PathHandler::get_default_log_dir().to_str().unwrap())
-            .try_into()
-        {
-            log_dir_path
-        } else {
-            PathHandler::get_default_log_dir().to_owned()
-        };
-
-        Ok(Self {
-            ip,
-            port,
-            num_workers,
-            log_dir,
-        })
-    }
-}
-
-pub struct ConfigHandler {
-    path: std::path::PathBuf,
-    config: Config,
-}
-
-impl ConfigHandler {
-    pub(crate) fn new(path: &std::path::Path) -> Self {
-        Self {
-            path: path.to_owned(),
-            config: if let Ok(c) = Config::try_from(path) {
-                c
-            } else {
-                Config::default()
-            },
+    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+        let mut path_buf = path.to_owned();
+        if path_buf.is_dir() {
+            path_buf.push(global::DEFAULT_CONFIG_FILE_NAME);
         }
+        let res = std::fs::read_to_string(path_buf);
+        if let Err(e) = res {
+            return match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(Self::default()),
+                _ => Err(e.into()),
+            };
+        }
+        Ok(toml::from_str(&res.unwrap())?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs::File,
+        io::Write,
+        net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
+        path::PathBuf,
+    };
+
+    use crate::{config, global};
+
+    use super::Config;
+
+    #[test]
+    fn create_dir_all_test() {
+        let mut path = PathBuf::from("C:\\Users\\feyn\\.cache\\from_tinyfileshare\\temp");
+
+        std::fs::create_dir_all(&path).unwrap();
+        path.push("config.toml");
+        File::create(&path)
+            .unwrap()
+            .write_all("temp contents".as_bytes())
+            .unwrap()
     }
 
-    pub(crate) fn generate_file(&self) {
-        todo!()
+    const TEMP_CONF_PATH: &str = "C:\\Users\\feyn\\.cache\\tinyfileshare\\configdir";
+
+    #[test]
+    fn serial_test() {
+        let config = Config::new(
+            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 3, 1)), 2082),
+            0,
+            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
+            vec![("feyn", "387eccc3").into()],
+        );
+        // config.add_user("feyn", "387eccc3");
+        global::set_config_path(TEMP_CONF_PATH);
+        let res = config.store_to_file();
+        assert!(res.is_ok());
     }
 
-    pub(crate) fn save_port(&mut self, port: u16) -> std::io::Result<()> {
-        let mut path = self.path.clone();
-        path.push(".tinyfileshare");
-        std::fs::create_dir_all(&path)?;
-        path.push("port");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(&port.to_ne_bytes())?;
-        f.flush()?;
-        Ok(())
-    }
-    pub(crate) fn port(&self) -> std::io::Result<u16> {
-        // read port from config file
-        todo!()
+    #[test]
+    fn deserial_test() {
+        let config = Config::new(
+            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 3, 1)), 2082),
+            0,
+            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
+            vec![("feyn", "387eccc3").into()],
+        );
+        // config.add_user("feyn", "387eccc3");
+        global::set_config_path(TEMP_CONF_PATH);
+        let read_conf_res = Config::try_from(global::config_path());
+        assert!(read_conf_res.is_ok());
+        assert_eq!(read_conf_res.unwrap(), config);
     }
 
-    pub(crate) fn num_workers(&self) -> u8 {
-        // read num_workers from config file
-        todo!()
+    #[test]
+    fn read_file_err_test() {
+        let res = std::fs::read_to_string("C:\\Users\\feyn\\.cache\\tinyfileshare\\");
+        assert_eq!(std::io::ErrorKind::NotFound, res.unwrap_err().kind())
     }
 }

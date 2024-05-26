@@ -1,9 +1,13 @@
 use std::{
     io::{BufWriter, ErrorKind, Write},
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 mod client;
+
+
+
+pub const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -53,7 +57,7 @@ fn read_port() -> u16 {
 
 fn send_file_paths<T: AsRef<str>>(file_paths: impl Iterator<Item = T>) -> Result<(), SendError> {
     let port = read_port();
-    let conn_res = std::net::TcpStream::connect(SocketAddr::new(fshare_server::LOCALHOST, port));
+    let conn_res = std::net::TcpStream::connect(SocketAddr::new(LOCALHOST, port));
     if conn_res.is_err() {
         Err(SendError::ConnectionError(conn_res.unwrap_err()))
     } else {

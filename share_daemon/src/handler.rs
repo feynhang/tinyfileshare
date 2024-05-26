@@ -1,43 +1,12 @@
 use std::{
-    fs::{File, OpenOptions},
-    hash::{DefaultHasher, Hash, Hasher},
+    fs::File,
     io::{BufRead, BufReader, BufWriter, Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::OnceLock,
-    thread::JoinHandle,
 };
 
-use crossbeam::channel::Sender;
-use serde::Serialize;
-use toml::Table;
-
-use crate::{filedata::FileData, log::LoggingPath, server::Server, CommonResult};
-
-pub(crate) fn send_file_data(
-    mut writer: BufWriter<TcpStream>,
-    file_data: FileData,
-) -> std::io::Result<()> {
-    writer.write_fmt(format_args!("{}\n", file_data.name()))?;
-    if let Some(data) = file_data.data() {
-        writer.write_all(data)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-pub(crate) fn read_file(path: &std::path::Path) -> std::io::Result<Option<FileData>> {
-    let name = PathHandler::get_last_part(path);
-    let mut data = vec![];
-    let mut f = File::open(path)?;
-    if f.read_to_end(&mut data)? == 0 {
-        Ok(None)
-    } else {
-        data.shrink_to_fit();
-        Ok(Some(FileData::new(name, data)))
-    }
-}
+use crate::{dispatcher::HeadCommand, filedata::FileData};
 
 pub struct PathHandler;
 impl PathHandler {
@@ -64,7 +33,6 @@ impl PathHandler {
         path_str[path_str.rfind(std::path::MAIN_SEPARATOR).unwrap()..].to_owned()
     }
 
-
     pub(crate) fn get_default_log_dir() -> &'static Path {
         static mut DEFAULT_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
         unsafe {
@@ -85,135 +53,85 @@ impl PathHandler {
     }
 }
 
-pub trait ReadAll {
-    fn read_all(&mut self) -> std::io::Result<Vec<u8>>;
-}
+// pub trait ReadAll {
+//     fn read_all(&mut self) -> std::io::Result<Vec<u8>>;
+// }
 
-impl<W> ReadAll for W
-where
-    W: std::io::Read,
-{
-    fn read_all(&mut self) -> std::io::Result<Vec<u8>> {
-        let mut ret = vec![];
-        loop {
-            let mut buf = [0_u8; 1024];
-            let size = self.read(&mut buf)?;
-            if size == 0 {
-                break;
-            }
-            ret.extend(&buf[0..size]);
-        }
-        Ok(ret)
-    }
-}
+// impl<W> ReadAll for W
+// where
+//     W: std::io::Read,
+// {
+//     fn read_all(&mut self) -> std::io::Result<Vec<u8>> {
+//         let mut ret = vec![];
+//         loop {
+//             let mut buf = [0_u8; 1024];
+//             let size = self.read(&mut buf)?;
+//             if size == 0 {
+//                 break;
+//             }
+//             ret.extend(&buf[0..size]);
+//         }
+//         Ok(ret)
+//     }
+// }
 
 #[derive(Debug)]
 pub enum Handler {
     SendHandler {
         path: PathBuf,
-        socket_addr: SocketAddr,
+        raw_server_addr: SocketAddr,
     },
-    ReceiveHandler(TcpStream),
+    RecvHandler(TcpStream),
 }
 
 impl Handler {
-    fn read_from_stream(stream: &mut TcpStream) -> std::io::Result<Data> {
-        let mut first_line = String::new();
-        let mut reader = BufReader::new(stream);
-        if reader.read_line(&mut first_line)? == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Read first line failed! It should be a command: \"share\" or \"trans\"!!!",
-            ));
+    fn send_file_data(
+        mut writer: BufWriter<TcpStream>,
+        file_data: FileData,
+    ) -> std::io::Result<()> {
+        writer.write_fmt(format_args!(
+            "{}\n{}\n",
+            HeadCommand::Send.to_static_str(),
+            file_data.name()
+        ))?;
+        if let Some(data) = file_data.data() {
+            writer.write_all(data)?;
         }
-        first_line = first_line.trim_end().to_owned();
-        match Command::from_str(&first_line)? {
-            Command::Share => {
-                let mut paths = vec![PathBuf::from(&first_line)];
-                let mut line = String::new();
-                while reader.read_line(&mut line)? > 0 {
-                    paths.push(PathBuf::from(line.trim_end()));
-                    line.clear();
-                }
-                Ok(Data::Paths(paths))
-            }
-            Command::Transfer => {
-                let name = first_line.to_owned();
-                let data = reader.read_all()?;
-                Ok(Data::FileData(name, data))
-            }
-        }
+        writer.flush()?;
+        Ok(())
     }
 
-    pub(crate) fn handle(&mut self) -> Option<Data> {
+    fn read_file(path: &std::path::Path) -> std::io::Result<FileData> {
+        let name = PathHandler::get_last_part(path);
+        let mut data = vec![];
+        let mut f = File::open(path)?;
+        let size = f.read_to_end(&mut data)?;
+        if size == 0 {
+            return Ok(FileData::new(name, None));
+        }
+        data.shrink_to_fit();
+        Ok(FileData::new(name, Some(data)))
+    }
+
+    pub(crate) fn handle(self) -> std::io::Result<()> {
         match self {
-            Handler::SendHandler { path, socket_addr } => {
-                let res = TcpStream::connect(socket_addr.clone());
-                if let Err(e) = res {
-                    path.log_err(e).unwrap();
-                    return None;
-                }
-                let file_read_res = read_file(&path);
-                if let Err(e) = file_read_res {
-                    path.log_err(e).unwrap();
-                    return None;
-                }
-                if let Some(file_data) = file_read_res.unwrap() {
-                    if let Err(e) = send_file_data(BufWriter::new(res.unwrap()), file_data) {
-                        path.log_err(e).unwrap();
-                    }
-                }
-                None
+            Handler::SendHandler {
+                path,
+                raw_server_addr: socket_addr,
+            } => {
+                let stream = TcpStream::connect(socket_addr.clone())?;
+                let file_data = Self::read_file(&path)?;
+                Self::send_file_data(BufWriter::new(stream), file_data)?;
+                return Ok(());
             }
-            Handler::ReceiveHandler(stream) => {
-                if let Ok(data) = Self::read_from_stream(stream) {
-                    match data {
-                        Data::Paths(_) => {
-                            //continue process in current thread
-                            todo!()
-                        }
-                        Data::FileData(name, data) => {
-                            //start a new worker thread to do
-                            todo!()
-                        }
-                    }
+            Handler::RecvHandler(stream) => {
+                let mut buf_reader = BufReader::new(stream);
+                let mut name = String::new();
+                if let Ok(size) = buf_reader.read_line(&mut name) {
+                    if size == 0 {}
                 }
-                None
+                Ok(())
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Data {
-    Paths(Vec<PathBuf>),
-    FileData(String, Vec<u8>),
-}
-
-pub struct ReadHandler;
-
-impl ReadHandler {
-    // each path should end with a line break when client send paths to server
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Command {
-    Share,
-    Transfer,
-}
-
-impl FromStr for Command {
-    type Err = std::io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let command = s.to_uppercase();
-        match command.as_str() {
-            "SHARE" => Ok(Command::Share),
-            "TRANS" => Ok(Command::Transfer),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Command is unsupported: {}", s),
-            )),
         }
     }
 }

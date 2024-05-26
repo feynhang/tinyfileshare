@@ -5,8 +5,8 @@ pub struct FileData {
 }
 
 impl FileData {
-    pub(crate) fn new(name: String, data: Vec<u8>) -> Self {
-        Self { name, data: Some(data) }
+    pub(crate) fn new(name: String, data: Option<Vec<u8>>) -> Self {
+        Self { name, data }
     }
 
     pub(crate) fn name(&self) -> &str {
