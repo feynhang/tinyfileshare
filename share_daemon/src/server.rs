@@ -1,83 +1,98 @@
 use std::{
     net::{SocketAddr, TcpListener},
-    path::{Path, PathBuf, MAIN_SEPARATOR},
+    path::{Path, MAIN_SEPARATOR},
 };
 
 use crossbeam::channel::bounded;
 
 use crate::{
-    config::Config, dispatcher::Dispatcher, error::ServerError, workers::Workers, ServerResult,
+    config::Config, dispatcher::Dispatcher, error::CommonError, global, workers::Workers, CommonResult
 };
 
-pub struct Server;
+static mut RUNNING: bool = false;
 
-impl Server {
-    fn checked_path(path: &Path) -> ServerResult<&Path> {
-        const PATH_INVALID_CHAR: [char; 9] = ['\\', '*', '?', '/', '"', '<', '>', '|', ':'];
-        if path.is_symlink() {
-            return Err(ServerError::PathError(
-                "symbolic links for config path is not supported!",
-            ));
+fn check_running() {
+    unsafe {
+        if RUNNING {
+            panic!("Illegal function call!!!");
         }
-        let invalid = path
-            .to_str()
-            .unwrap()
-            .split(MAIN_SEPARATOR)
-            .any(|part| part.chars().any(|ch| PATH_INVALID_CHAR.contains(&ch)));
-        if invalid {
-            return Err(ServerError::PathError("Invalid path!"));
+        RUNNING = true;
+    }
+}
+
+fn check_path(path_for_check: &Path) -> CommonResult<&Path> {
+    const PATH_INVALID_CHAR: [char; 9] = ['\\', '*', '?', '/', '"', '<', '>', '|', ':'];
+    if path_for_check.is_symlink() {
+        return Err(CommonError::PathError(
+            "symbolic links for config path is not supported!".into(),
+        ));
+    }
+    let path_str = path_for_check.to_str();
+    if path_str.is_none() {
+        return Err(CommonError::PathError(format!(
+            "The path is invalid unicode! path: {:?}",
+            path_for_check
+        )));
+    }
+    let invalid = path_str
+        .unwrap()
+        .split(MAIN_SEPARATOR)
+        .any(|part| part.chars().any(|ch| PATH_INVALID_CHAR.contains(&ch)));
+    if invalid {
+        return Err(CommonError::PathError(
+            r#"Invalid path! Path should not contain these chars: \, *, ?, /, ", <, >, |, : "#
+                .into(),
+        ));
+    }
+
+    Ok(path_for_check)
+}
+
+fn start_inner() -> CommonResult<()> {
+    let default_config = Config::default();
+    let listener;
+    let listen_res = TcpListener::bind(global::config().socket_addr());
+    if let Err(e) = listen_res {
+        if *global::config() == default_config {
+            return Err(e.into());
         }
-
-        Ok(path)
+        *global::config() = default_config;
+        listener = TcpListener::bind(global::config().socket_addr())?;
+    } else {
+        listener = listen_res.unwrap();
     }
-
-    fn start_with_config(mut config: Config) -> ServerResult<()> {
-        let default_config = Config::default();
-        let listener;
-        let listen_res = TcpListener::bind((config.ip, config.port));
-        if let Err(e) = listen_res {
-            if config == default_config {
-                return Err(e.into());
-            }
-            config = default_config;
-            listener = TcpListener::bind((config.ip, config.port))?;
-        } else {
-            listener = listen_res.unwrap();
-        }
-        let local_addr = listener.local_addr().unwrap();
-        config.port = local_addr.port();
-        config.ip = local_addr.ip();
-        let num_workers = config.num_workers;
-        config.store_to_file();
-        let (handler_tx, handler_rx) = bounded(num_workers as usize + 1);
-        let mut dispatcher = Dispatcher::new(handler_tx);
-        _ = Workers::start(handler_rx, num_workers);
-        while let Ok((stream, _)) = listener.accept() {
-            dispatcher.dispatch(stream)?;
-        }
-        Ok(())
+    let local_addr = listener.local_addr().unwrap();
+    global::config().set_addr(local_addr);
+    let num_workers = global::config().num_workers();
+    global::config().store()?;
+    let (handler_tx, handler_rx) = bounded(num_workers as usize + 1);
+    let mut dispatcher = Dispatcher::new(handler_tx);
+    _ = Workers::start(handler_rx, num_workers);
+    while let Ok((stream, _)) = listener.accept() {
+        dispatcher.dispatch(stream)?;
     }
+    Ok(())
+}
 
-    pub fn start_with_config_path(config_path: &Path) -> ServerResult<()> {
-        crate::global::set_config_path(Self::checked_path(config_path)?);
-        Self::start_with_config(Config::try_from(config_path)?)?;
-        Ok(())
-    }
+pub fn start_with_config_path<P: AsRef<Path>>(config_path: P) -> CommonResult<()> {
+    check_running();
+    crate::global::set_config_path(check_path(config_path.as_ref())?);
+    *crate::global::config() = Config::from_file(config_path.as_ref());
+    start_inner()?;
+    Ok(())
+}
 
-    pub fn start_default() -> ServerResult<()> {
-        Self::start_with_config(Config::default())?;
-        Ok(())
-    }
+pub fn start_default() -> CommonResult<()> {
+    check_running();
+    start_inner()?;
+    Ok(())
+}
 
-    pub fn start_on(addr: SocketAddr) -> ServerResult<()> {
-        let current_config = Config {
-            ip: addr.ip(),
-            port: addr.port(),
-            ..Default::default()
-        };
-        Self::start_with_config(current_config)?;
-        Ok(())
-    }
+pub fn start_on(addr: SocketAddr) -> CommonResult<()> {
+    check_running();
+    crate::global::config().set_addr(addr);
+    start_inner()?;
+    Ok(())
 }
 
 #[cfg(test)]

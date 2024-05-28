@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, BufWriter, Write},
     net::{IpAddr, SocketAddr, TcpStream},
     path::PathBuf,
     str::FromStr,
@@ -9,45 +9,58 @@ use std::{
 use crossbeam::channel::Sender;
 use uuid::Uuid;
 
-use crate::{error::ServerError, handler::Handler, ServerResult};
+use crate::{config::User, error::CommonError, global, handler::Handler, CommonResult};
 
-#[derive(Debug, Clone, Copy)]
-pub enum HeadCommand {
-    Share,
+fn dest_server_addr() -> SocketAddr {
+    unimplemented!()
+}
+
+#[derive(Debug, Clone)]
+pub enum Command {
+    Share(IpAddr),
     Send,
-    Register,
+    Register(String),
+    Unsupported,
 }
 
-impl HeadCommand {
+impl Command {
     const SHARE_STR: &'static str = "SHARE";
-    const TRANS_STR: &'static str = "TRANS";
+    const SEND_STR: &'static str = "SEND";
     const REG_STR: &'static str = "REG";
+}
 
-    pub const fn to_static_str(&self) -> &'static str {
-        match self {
-            HeadCommand::Share => Self::SHARE_STR,
-            HeadCommand::Send => Self::TRANS_STR,
-            HeadCommand::Register => Self::REG_STR,
-        }
+impl std::fmt::Display for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Command::Share(addr) => format!("{} {}", Self::SHARE_STR, addr),
+            Command::Send => Self::SEND_STR.to_owned(),
+            Command::Register(username) => format!("{} {}", Self::REG_STR, username),
+            Command::Unsupported => "".to_owned(),
+        };
+        write!(f, "{}", s)
     }
 }
 
-impl FromStr for HeadCommand {
-    type Err = ServerError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let command = s.to_uppercase();
-        match command.as_str() {
-            Self::SHARE_STR => Ok(HeadCommand::Share),
-            Self::TRANS_STR => Ok(HeadCommand::Send),
-            Self::REG_STR => Ok(HeadCommand::Register),
-            _ => Err(ServerError::InvalidRequest),
+impl<T: AsRef<str>> From<T> for Command {
+    fn from(value: T) -> Self {
+        let s = value.as_ref();
+        if s == Self::SEND_STR {
+            return Command::Send;
         }
+        let res = s.split(' ').nth(1);
+        if res.is_none() {
+            return Command::Unsupported;
+        }
+        if s.starts_with(Self::REG_STR) {
+            return Command::Register(res.unwrap().to_owned());
+        }
+        if s.starts_with(Self::SHARE_STR) {
+            if let Ok(ip) = IpAddr::from_str(res.unwrap()) {
+                return Command::Share(ip);
+            }
+        }
+        Command::Unsupported
     }
-}
-
-fn get_peer_server_addr() -> SocketAddr {
-    todo!()
 }
 
 pub struct Dispatcher {
@@ -62,16 +75,27 @@ impl Dispatcher {
             connected_hosts: HashMap::new(),
         }
     }
-    pub(crate) fn dispatch(&mut self, stream: TcpStream) -> ServerResult<()> {
+
+    fn log_invalid_request(addr: SocketAddr) {
+        global::logger().log(
+            format!("Invalid request from end point [{}], ignored it.", addr),
+            crate::log::LogLevel::Warn,
+        )
+    }
+
+    pub(crate) fn dispatch(&mut self, stream: TcpStream) -> CommonResult<()> {
         let mut first_line = String::new();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        if reader.read_line(&mut first_line)? == 0 {
-            return Err(crate::error::ServerError::InvalidRequest);
+        let peer_addr = stream.peer_addr().unwrap();
+        let mut reader = BufReader::new(stream.try_clone()?);
+        let read_size = reader.read_line(&mut first_line)?;
+        if read_size == 0 {
+            Self::log_invalid_request(peer_addr);
+            return Ok(());
         }
         first_line = first_line.trim_end().to_owned();
 
-        match HeadCommand::from_str(&first_line)? {
-            HeadCommand::Share => {
+        match Command::from(&first_line) {
+            Command::Share(addr) => {
                 let mut paths = vec![PathBuf::from(&first_line)];
                 let mut line = String::new();
                 while reader.read_line(&mut line)? > 0 {
@@ -82,17 +106,25 @@ impl Dispatcher {
                     self.handler_tx
                         .send(Handler::SendHandler {
                             path,
-                            raw_server_addr: get_peer_server_addr(),
+                            raw_server_addr: dest_server_addr(),
                         })
                         .unwrap()
                 }
             }
-            HeadCommand::Send => self.handler_tx.send(Handler::RecvHandler(stream)).unwrap(),
-            HeadCommand::Register => {
-                let peer_addr = stream.peer_addr().unwrap();
-                // 
+            Command::Send => self.handler_tx.send(Handler::RecvHandler(stream)).unwrap(),
+            Command::Register(name) => {
+                if !global::config().check_user(&name) {
+                    let mut writer = BufWriter::new(stream);
+                    writer.write_all("ACCESS REFUSED\n".as_bytes())?;
+                    return Ok(());
+                }
+                // let peer_addr = stream.peer_addr().unwrap();
+                // validate client
+                // if not valid, log and ignore request
+                // if client is valid, insert
                 self.connected_hosts.insert(Uuid::new_v4(), peer_addr.ip());
             }
+            Command::Unsupported => Self::log_invalid_request(peer_addr),
         }
         Ok(())
     }

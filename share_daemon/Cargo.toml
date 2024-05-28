@@ -23,6 +23,9 @@ serde = { version = "*", features = ["derive"]}
 crossbeam = "*"
 toml = "*"
 chrono = "*"
+sha2 = "*"
+hex = "*"
+# const_format = "*"
 
 [target.x86_64-pc-windows-msvc.dependencies]
 windows-sys = { version = "0.52.0", features = [

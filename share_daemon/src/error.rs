@@ -1,49 +1,44 @@
 #[derive(Debug)]
-pub enum ServerError {
+pub enum CommonError {
     InvalidRequest,
+    RegisterRefused,
     IoError(std::io::Error),
-    PathError(&'static str),
-    ConfigError(&'static str),
+    PathError(String),
     // SerializeError(toml::ser::Error),
-    DeserializeError(toml::de::Error),
-    CommonError(String),
+    // DeserializeError(toml::de::Error),
+    SimpleError(String),
 }
 
-impl std::fmt::Display for ServerError {
+impl std::fmt::Display for CommonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServerError::InvalidRequest => write!(f, "Invalid request!!!"),
-            ServerError::IoError(io_err) => io_err.fmt(f),
-            ServerError::CommonError(e) => e.fmt(f),
-            ServerError::ConfigError(msg) => msg.fmt(f),
-            ServerError::PathError(e) => e.fmt(f),
-            ServerError::DeserializeError(deser_err) => deser_err.fmt(f),
+            CommonError::InvalidRequest => write!(f, "Invalid request!!!"),
+            CommonError::IoError(io_err) => io_err.fmt(f),
+            CommonError::SimpleError(e) => e.fmt(f),
+            CommonError::PathError(e) => e.fmt(f),
+            CommonError::RegisterRefused => write!(f, "Access Refused!!"),
+            // CommonError::DeserializeError(deser_err) => deser_err.fmt(f),
         }
     }
 }
 
-impl std::error::Error for ServerError {}
+impl std::error::Error for CommonError {}
 
-impl From<&'static str> for ServerError {
-    fn from(value: &'static str) -> Self {
-        Self::CommonError(value.to_owned())
-    }
-}
+// impl From<&'static str> for CommonError {
+//     fn from(value: &'static str) -> Self {
+//         Self::SimpleError(value.to_owned())
+//     }
+// }
 
-impl From<String> for ServerError {
+impl From<String> for CommonError {
     fn from(value: String) -> Self {
-        Self::CommonError(value)
+        Self::SimpleError(value)
     }
 }
 
-impl From<std::io::Error> for ServerError {
+impl From<std::io::Error> for CommonError {
     fn from(value: std::io::Error) -> Self {
         Self::IoError(value)
     }
 }
 
-impl From<toml::de::Error> for ServerError {
-    fn from(value: toml::de::Error) -> Self {
-        Self::DeserializeError(value)
-    }
-}

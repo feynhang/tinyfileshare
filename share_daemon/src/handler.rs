@@ -3,10 +3,9 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
-    sync::OnceLock,
 };
 
-use crate::{dispatcher::HeadCommand, filedata::FileData};
+use crate::{dispatcher::Command, filedata::FileData};
 
 pub struct PathHandler;
 impl PathHandler {
@@ -34,22 +33,14 @@ impl PathHandler {
     }
 
     pub(crate) fn get_default_log_dir() -> &'static Path {
-        static mut DEFAULT_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+        static mut DEFAULT_LOG_DIR: Option<PathBuf> = None;
         unsafe {
-            match DEFAULT_LOG_DIR.get() {
-                Some(p) => p,
-                None => {
-                    let mut default_log_dir = PathHandler::get_exe_dir_path();
-                    default_log_dir.push("log");
-                    DEFAULT_LOG_DIR.set(default_log_dir).unwrap();
-                    DEFAULT_LOG_DIR.get().unwrap()
-                }
-            }
+            DEFAULT_LOG_DIR.get_or_insert_with(|| {
+                let mut default_log_dir = PathHandler::get_exe_dir_path();
+                default_log_dir.push("log");
+                default_log_dir
+            })
         }
-    }
-    pub(crate) fn get_log_dir() -> PathBuf {
-        // read log dir config from config file
-        todo!()
     }
 }
 
@@ -91,7 +82,7 @@ impl Handler {
     ) -> std::io::Result<()> {
         writer.write_fmt(format_args!(
             "{}\n{}\n",
-            HeadCommand::Send.to_static_str(),
+            Command::Send,
             file_data.name()
         ))?;
         if let Some(data) = file_data.data() {
