@@ -1,3 +1,5 @@
+pub mod response;
+pub mod host;
 use error::CommonError;
 
 pub mod config;
@@ -17,11 +19,14 @@ pub type CommonResult<T> = Result<T, CommonError>;
 #[allow(unused)]
 mod global {
     use crate::config::Config;
+    use crate::host::Host;
     use crate::log::LogLevel;
     use crate::log::Logger;
+    use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::io::Stdout;
     use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
 
     pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
@@ -60,6 +65,17 @@ mod global {
         }
         path.push(DEFAULT_CONFIG_FILE_NAME);
         path
+    }
+
+    pub(crate) fn registered_hosts() -> &'static mut Vec<Host> {
+        static mut REG_HOSTS: OnceLock<Vec<Host>> =  OnceLock::new();
+        unsafe {
+            let hosts = REG_HOSTS.get_mut();
+            if hosts.is_none() {
+                REG_HOSTS.set(vec![]).unwrap();
+            }
+            hosts.unwrap()
+        }
     }
 
     #[cfg(feature = "file_log")]

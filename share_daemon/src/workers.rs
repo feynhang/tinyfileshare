@@ -1,10 +1,8 @@
-use std::
-    thread::{self, JoinHandle}
-;
+use std::thread::{self, JoinHandle};
 
 use crossbeam::channel::Receiver;
 
-use crate::handler::Handler;
+use crate::{global, handler::Handler};
 
 #[derive(Debug)]
 pub struct Workers {
@@ -12,14 +10,10 @@ pub struct Workers {
 }
 
 impl Workers {
-    pub(crate) fn start(
-        handler_rx: Receiver<Handler>,
-        // result_tx: Sender<HandleResult>,
-        num_workers: u8,
-    ) -> Self {
+    pub(crate) fn start(handler_rx: Receiver<Handler>) -> Self {
         let mut index = 0;
         let mut handles = vec![];
-        while index <= num_workers as usize {
+        while index <= global::config().num_workers() as usize {
             let rx_in = handler_rx.clone();
             // let tx_in = result_tx.clone();
             handles[index] = thread::spawn(move || Self::work_loop(rx_in));

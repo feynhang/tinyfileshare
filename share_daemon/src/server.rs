@@ -1,5 +1,5 @@
 use std::{
-    net::{SocketAddr, TcpListener},
+    net::{IpAddr, SocketAddr, TcpListener},
     path::{Path, MAIN_SEPARATOR},
 };
 
@@ -10,6 +10,7 @@ use crate::{
 };
 
 static mut RUNNING: bool = false;
+
 
 fn check_running() {
     unsafe {
@@ -63,13 +64,12 @@ fn start_inner() -> CommonResult<()> {
     }
     let local_addr = listener.local_addr().unwrap();
     global::config().set_addr(local_addr);
-    let num_workers = global::config().num_workers();
     global::config().store()?;
-    let (handler_tx, handler_rx) = bounded(num_workers as usize + 1);
+    let (handler_tx, handler_rx) = bounded(global::config().num_workers() as usize + 1);
     let mut dispatcher = Dispatcher::new(handler_tx);
-    _ = Workers::start(handler_rx, num_workers);
-    while let Ok((stream, _)) = listener.accept() {
-        dispatcher.dispatch(stream)?;
+    _ = Workers::start(handler_rx);
+    while let Ok((stream, addr)) = listener.accept() {
+        dispatcher.dispatch(stream, addr)?;
     }
     Ok(())
 }

@@ -59,6 +59,7 @@ pub struct Config {
     log_path: PathBuf,
     addr: SocketAddr,
     num_workers: u8,
+    recv_dir: PathBuf,
     users_dict: HashMap<u64, User>,
 }
 
@@ -66,11 +67,18 @@ impl Default for Config {
     fn default() -> Self {
         let mut log_path = PathHandler::get_default_log_dir().to_owned();
         log_path.push(format!("{}.log", chrono::Local::now().date_naive()));
+        let mut recv_dir = PathHandler::get_home_path();
+        recv_dir.push("tinyfileshare_recv");
+        if !recv_dir.exists() {
+            std::fs::create_dir_all(&recv_dir).unwrap();
+        }
+
         Self {
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT),
             num_workers: DEFAULT_NUM_WORKERS,
             log_path,
             users_dict: HashMap::new(),
+            recv_dir,
         }
     }
 }
@@ -82,6 +90,13 @@ impl Config {
         return hasher.finish();
     }
 
+    pub(crate) fn ip(&self) -> IpAddr {
+        self.addr.ip()
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.addr.port()
+    }
     pub(crate) fn socket_addr(&self) -> SocketAddr {
         self.addr
     }
@@ -94,9 +109,13 @@ impl Config {
         self.addr = addr.into()
     }
 
-    pub(crate) fn check_user(&self, name: &str) -> bool {
+    pub(crate) fn check_user(&self, name: &str) -> Option<&User> {
         let v = Self::simple_hash(name);
-        self.users_dict.contains_key(&v)
+        self.users_dict.get(&v)
+    }
+
+    pub(crate) fn recv_dir(&self) -> &Path {
+        &self.recv_dir
     }
 
     pub(crate) fn from_file(path: &Path) -> Self {
@@ -171,9 +190,10 @@ impl Config {
         mut num_workers: u8,
         log_dir: PathBuf,
         users: Vec<User>,
+        recv_dir: PathBuf,
     ) -> Self {
         num_workers = if num_workers == 0 || num_workers > 120 {
-            3
+            DEFAULT_NUM_WORKERS
         } else {
             num_workers
         };
@@ -186,6 +206,7 @@ impl Config {
             addr: SocketAddr::new(ip, port),
             num_workers,
             users_dict,
+            recv_dir,
         }
     }
 }
@@ -220,6 +241,7 @@ mod tests {
             0,
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
             vec![("feyn", "387eccc3").into()],
+            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare_recv"),
         );
         // config.add_user("feyn", "387eccc3");
         global::set_config_path(TEMP_CONF_PATH);
@@ -235,6 +257,7 @@ mod tests {
             0,
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
             vec![("feyn", "387eccc3").into()],
+            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare_recv"),
         );
         // config.add_user("feyn", "387eccc3");
         global::set_config_path(TEMP_CONF_PATH);

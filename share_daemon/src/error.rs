@@ -1,7 +1,5 @@
 #[derive(Debug)]
 pub enum CommonError {
-    InvalidRequest,
-    RegisterRefused,
     IoError(std::io::Error),
     PathError(String),
     // SerializeError(toml::ser::Error),
@@ -12,11 +10,13 @@ pub enum CommonError {
 impl std::fmt::Display for CommonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommonError::InvalidRequest => write!(f, "Invalid request!!!"),
             CommonError::IoError(io_err) => io_err.fmt(f),
             CommonError::SimpleError(e) => e.fmt(f),
             CommonError::PathError(e) => e.fmt(f),
-            CommonError::RegisterRefused => write!(f, "Access Refused!!"),
+            // CommonError::ConnectionsExceedsLimit => write!(f, "CONNECTION_EXCEEDS_LIMIT"),
+            // CommonError::RegisterFailed => write!(f, "REG_FAILED"),
+            // CommonError::UnRegistered => write!(f, "UNREGISTERED"),
+            // CommonError::RegisterFailed(detail) => write!(f, "{}", detail),
             // CommonError::DeserializeError(deser_err) => deser_err.fmt(f),
         }
     }
