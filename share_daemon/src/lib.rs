@@ -1,5 +1,6 @@
+pub mod request;
 pub mod response;
-pub mod host;
+
 use error::CommonError;
 
 pub mod config;
@@ -19,15 +20,18 @@ pub type CommonResult<T> = Result<T, CommonError>;
 #[allow(unused)]
 mod global {
     use crate::config::Config;
-    use crate::host::Host;
+
     use crate::log::LogLevel;
     use crate::log::Logger;
     use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::io::Stdout;
+    use std::net::IpAddr;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
+    pub const BUF_SIZE: usize = 4096;
+    pub const NEWLINE: &str = "\r\n";
     pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
     static mut CONFIG_PATH: Option<PathBuf> = None;
@@ -67,12 +71,12 @@ mod global {
         path
     }
 
-    pub(crate) fn registered_hosts() -> &'static mut Vec<Host> {
-        static mut REG_HOSTS: OnceLock<Vec<Host>> =  OnceLock::new();
+    pub(crate) fn registered_hosts() -> &'static mut HashMap<String, IpAddr> {
+        static mut REG_HOSTS: OnceLock<HashMap<String, IpAddr>> = OnceLock::new();
         unsafe {
             let hosts = REG_HOSTS.get_mut();
             if hosts.is_none() {
-                REG_HOSTS.set(vec![]).unwrap();
+                REG_HOSTS.set(HashMap::new()).unwrap();
             }
             hosts.unwrap()
         }
@@ -102,10 +106,16 @@ mod tests {
     use std::hash::DefaultHasher;
     use std::hash::Hash;
     use std::hash::Hasher;
+    use std::io::BufRead;
+    use std::io::BufReader;
+    use std::io::Cursor;
+    use std::io::Read;
 
     use chrono::Datelike;
     use sha2::Digest;
     use sha2::Sha256;
+
+    use crate::global;
 
     #[test]
     fn sha2_string_test() {
@@ -146,5 +156,30 @@ mod tests {
             "day = {}, date_naive = {}, date raw = {}",
             day, dat_naive, dt
         );
+    }
+
+    #[test]
+    fn test_read_line() {
+        let content = "inner content line 1\r\n\r\nline content 3";
+        let cursor = Cursor::new(content);
+        let mut reader = BufReader::with_capacity(global::BUF_SIZE, cursor);
+        let mut line = String::new();
+        let mut i = 0;
+
+        while let Ok(size) = reader.read_line(&mut line) {
+            if size == 0 {
+                break;
+            }
+            i += 1;
+            println!("read line {} size = {}; content = {}", i, size, line);
+            line.clear();
+        }
+        // if let Ok(size) = size_res {
+        //     println!("read size = {}, content size = {}", size, content.len());
+        // } else {
+        //     eprintln!("{}", size_res.unwrap_err());
+        // }
+        // let size = reader.read_line(&mut line).unwrap();
+        // println!("{:?}", line.trim().chars());
     }
 }

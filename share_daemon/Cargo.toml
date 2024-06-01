@@ -25,8 +25,9 @@ toml = "*"
 chrono = "*"
 sha2 = "*"
 hex = "*"
-constcat = "*"
-# const_format = "*"
+# constcat = "*"
+const_format = "*"
+# tinystr = "*"
 
 [target.x86_64-pc-windows-msvc.dependencies]
 windows-sys = { version = "0.52.0", features = [

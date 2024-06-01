@@ -24,13 +24,13 @@ fn check_running() {
 fn check_path(path_for_check: &Path) -> CommonResult<&Path> {
     const PATH_INVALID_CHAR: [char; 9] = ['\\', '*', '?', '/', '"', '<', '>', '|', ':'];
     if path_for_check.is_symlink() {
-        return Err(CommonError::PathError(
+        return Err(CommonError::PathErr(
             "symbolic links for config path is not supported!".into(),
         ));
     }
     let path_str = path_for_check.to_str();
     if path_str.is_none() {
-        return Err(CommonError::PathError(format!(
+        return Err(CommonError::PathErr(format!(
             "The path is invalid unicode! path: {:?}",
             path_for_check
         )));
@@ -40,7 +40,7 @@ fn check_path(path_for_check: &Path) -> CommonResult<&Path> {
         .split(MAIN_SEPARATOR)
         .any(|part| part.chars().any(|ch| PATH_INVALID_CHAR.contains(&ch)));
     if invalid {
-        return Err(CommonError::PathError(
+        return Err(CommonError::PathErr(
             r#"Invalid path! Path should not contain these chars: \, *, ?, /, ", <, >, |, : "#
                 .into(),
         ));
@@ -68,8 +68,14 @@ fn start_inner() -> CommonResult<()> {
     let (handler_tx, handler_rx) = bounded(global::config().num_workers() as usize + 1);
     let mut dispatcher = Dispatcher::new(handler_tx);
     _ = Workers::start(handler_rx);
-    while let Ok((stream, addr)) = listener.accept() {
-        dispatcher.dispatch(stream, addr)?;
+    loop {
+        let accept_res  =listener.accept();
+        if let Err(e) = accept_res  {
+            global::logger().log(format_args!("Accept a connection failed!\nDetail: {}", e), crate::log::LogLevel::Error);
+            continue;
+        }
+        let (conn, addr) = accept_res.unwrap();
+        dispatcher.dispatch(conn, addr);
     }
     Ok(())
 }

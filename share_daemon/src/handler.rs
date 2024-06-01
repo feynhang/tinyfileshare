@@ -1,14 +1,14 @@
 use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Read, Write},
-    net::TcpStream,
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
-use crate::{
-    config::Config, dispatcher::Command, filedata::FileData, global, host::Host,
-    response::ResponseCode,
-};
+use const_format::str_repeat;
+
+use crate::{filedata::FileData, global, request::RequestCommand, response::Response};
 const BUF_SIZE: usize = 4096;
 const NEW_LINE: &str = "\r\n";
 
@@ -93,15 +93,23 @@ where
 #[allow(unused)]
 #[derive(Debug)]
 pub enum Handler {
-    FileSendHandler {
-        conn: TcpStream,
-        paths: Vec<PathBuf>,
-        host_reg_index: usize,
-    },
-    MsgSendHandler(TcpStream, ResponseCode),
-    RecvHandler(TcpStream),
-    RegisterHandler(TcpStream, Host),
-    ConfigureHandler(Config),
+    FileShareHandler(BufReader<TcpStream>),
+    ReplyHandler(TcpStream, Response),
+    FileRecvHandler(BufReader<TcpStream>),
+    HostRegHandler(BufReader<TcpStream>),
+    // ConfigureHandler(Config),
+}
+
+fn check_empty_line(line: &str, writer: &mut BufWriter<TcpStream>) -> std::io::Result<bool> {
+    if !line.trim().is_empty() {
+        writer.write_line(Response::InvalidRequest)?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn read_all_paths(reader: &mut BufReader<TcpStream>) -> std::io::Result<Vec<PathBuf>> {
+    todo!()
 }
 
 impl Handler {
@@ -119,75 +127,107 @@ impl Handler {
 
     pub(crate) fn handle(self) -> std::io::Result<()> {
         match self {
-            Handler::FileSendHandler {
-                conn,
-                paths,
-                host_reg_index,
-            } => {
-                let host = global::registered_hosts().get_mut(host_reg_index).unwrap();
-                let addr = host.to_addr();
-                let mut client_writer = BufWriter::with_capacity(BUF_SIZE, conn);
-                let target_connection = TcpStream::connect(addr)?;
-                let mut target_writer =
-                    BufWriter::with_capacity(BUF_SIZE, target_connection.try_clone()?);
-                for path in paths {
+            Handler::FileShareHandler(mut local_conn_reader) => {
+                let mut line = String::new();
+                local_conn_reader.read_line(&mut line)?;
+                let mut local_conn_writer =
+                    BufWriter::with_capacity(BUF_SIZE, local_conn_reader.get_ref().try_clone()?);
+                if !check_empty_line(&line, &mut local_conn_writer)? {
+                    return Ok(());
+                }
+                line.clear();
+                local_conn_reader.read_line(&mut line)?;
+                let ip_opt = global::registered_hosts().get(&line);
+                if ip_opt.is_none() {
+                    local_conn_writer.write_line(Response::UnregisteredHost)?;
+                    return Ok(());
+                }
+                let ip = ip_opt.unwrap().clone();
+                line.clear();
+                local_conn_reader.read_line(&mut line)?;
+                if !check_empty_line(&line, &mut local_conn_writer)? {
+                    return Ok(());
+                }
+                line.clear();
+
+                let mut file_paths = vec![];
+                while local_conn_reader.read_line(&mut line)? != 0 {
+                    if let Ok(p) = PathBuf::from_str(&line) {
+                        if p.is_file() {
+                            file_paths.push(p);
+                        }
+                    }
+                }
+
+                let addr = SocketAddr::new(ip, global::config().port());
+                let conn_res = TcpStream::connect(addr);
+                if let Err(e) = conn_res {
+                    local_conn_writer.write_line(Response::ConnectHostFailed(line, ip, e))?;
+                    return Ok(());
+                }
+                let mut target_writer = BufWriter::with_capacity(BUF_SIZE, conn_res.unwrap());
+                for path in file_paths {
                     let file_data = Self::read_file(&path)?;
                     let file_size = file_data.data().len();
-                    target_writer.write_line(Command::Send)?;
+                    target_writer.write_line(RequestCommand::FileReceive.as_ref())?;
                     target_writer.write_line(format_args!("{}{}", NEW_LINE, file_data.name()))?;
                     target_writer.write_line(file_size)?;
 
-                    client_writer.write_fmt(format_args!("File:{}\n", file_data.name()))?;
+                    local_conn_writer.write_line(format_args!("File:{}", file_data.name()))?;
                     let mut written_len = 0;
                     while written_len < file_size {
                         written_len += target_writer.write(file_data.data())?;
-                        client_writer.write_fmt(format_args!(
+                        local_conn_writer.write_line(format_args!(
                             "{}{}",
-                            ResponseCode::FileTransProgress(written_len as f64 / file_size as f64),
+                            Response::FileSendProgress(written_len as f64 / file_size as f64),
                             NEW_LINE,
                         ))?;
                     }
 
-                    target_writer.write(constcat::concat!(NEW_LINE, NEW_LINE).as_bytes())?;
+                    target_writer.write(str_repeat!(NEW_LINE, 2).as_bytes())?;
                     target_writer.flush()?;
                 }
                 return Ok(());
             }
-            Handler::RecvHandler(conn) => {
-                let mut buf_reader = BufReader::with_capacity(BUF_SIZE, conn.try_clone()?);
+            Handler::FileRecvHandler(mut buf_reader) => {
                 let mut files_datas: Vec<FileData> = vec![];
-                let mut buf = String::new();
+                let mut line = String::new();
                 loop {
-                    buf_reader.read_line(&mut buf)?;
-                    if buf.trim().len() == 0 {
-                        buf.clear();
-                        if buf_reader.read_line(&mut buf)? > 0 {
-                            let name = buf.trim().to_owned();
-                            buf.clear();
-                            if buf_reader.read_line(&mut buf)? > 0 {
-                                if let Ok(file_size) = usize::from_str_radix(&buf, 10) {
+                    buf_reader.read_line(&mut line)?;
+                    if line.trim().is_empty() {
+                        line.clear();
+                        if buf_reader.read_line(&mut line)? > 0 {
+                            let name = line.trim().to_owned();
+                            line.clear();
+                            if buf_reader.read_line(&mut line)? > 0 {
+                                if let Ok(file_size) = usize::from_str_radix(&line, 10) {
                                     let mut data = vec![0_u8; file_size];
                                     buf_reader.read_exact(&mut data)?;
                                     files_datas.push(FileData::new(name, data));
                                     continue;
                                 }
                             }
-                            Self::MsgSendHandler(conn, ResponseCode::InvalidTransFormat);
+                            Self::ReplyHandler(buf_reader.into_inner(), Response::InvalidRequest);
                             return Ok(());
                         } else {
                             if files_datas.is_empty() {
-                                Self::MsgSendHandler(conn, ResponseCode::FileTransEmpty);
+                                Self::ReplyHandler(
+                                    buf_reader.into_inner(),
+                                    Response::InvalidRequest,
+                                );
                                 return Ok(());
                             }
                             break;
                         }
+                    } else {
+                        Self::ReplyHandler(buf_reader.into_inner(), Response::InvalidRequest);
+                        return Ok(());
                     }
-                    Self::MsgSendHandler(conn, ResponseCode::InvalidTransFormat);
-                    return Ok(());
                 }
-                let name_res = buf_reader.read_line(&mut buf);
+                line.clear();
+                let name_res = buf_reader.read_line(&mut line);
                 if name_res.is_err() || name_res.unwrap() == 0 {
-                    Self::MsgSendHandler(conn, ResponseCode::InvalidTransFormat);
+                    Self::ReplyHandler(buf_reader.into_inner(), Response::InvalidRequest);
                     return Ok(());
                 }
 
@@ -200,15 +240,15 @@ impl Handler {
                 }
                 Ok(())
             }
-            Handler::MsgSendHandler(conn, msg) => {
+            Handler::ReplyHandler(conn, msg) => {
                 BufWriter::new(conn).write_fmt(format_args!("{}\n", msg))
             }
-            Handler::RegisterHandler(conn, host) => {
-                global::registered_hosts().push(host);
-                Self::MsgSendHandler(conn, ResponseCode::RegisterSuccess);
+            Handler::HostRegHandler(reader) => {
+                // let mut line = String::new();
+                // global::registered_hosts().push(host);
+                // Self::ReplyHandler(conn, Response::RegisterSuccess);
                 Ok(())
             }
-            Handler::ConfigureHandler(_) => todo!(),
         }
     }
 }
