@@ -1,212 +1,281 @@
 use std::{
     collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    io::Write,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    fs::File,
+    io::{Read, Write},
+    net::IpAddr,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
-use sha2::{Digest, Sha256};
+use crate::global;
 
-use crate::{global, handler::PathHandler, CommonResult};
-
-// pub(crate) const DEFAULT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
-// pub(crate) const DEFAULT_IP_STR: &str = "0.0.0.0";
 pub(crate) const UNSPECIFIED_PORT: u16 = 0;
-pub(crate) const DEFAULT_NUM_WORKERS: u8 = 3;
+pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
+pub(crate) const MAX_WORKERS: u8 = 120;
+pub(crate) const MAX_PARALLEL: u8 = 4;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-pub(crate) struct User {
-    pub(crate) name: String,
-    pub(crate) password: String,
+pub(crate) const DEFAULT_CLIENT_PORT: u16 = 10020;
+
+pub(crate) struct ConfigStore {
+    current_config: Config,
+    last_modified: LastModified,
 }
 
-impl User {
-    pub fn new<T: AsRef<str>>(name: T, password: T) -> Self {
+#[derive(Debug)]
+pub(crate) enum LastModified {
+    Unsaved,
+    LastModTime(SystemTime),
+    Unsupported,
+}
+
+impl PartialEq for LastModified {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::LastModTime(l0), Self::LastModTime(r0)) => *l0 == *r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+impl ConfigStore {
+    fn default() -> Self {
         Self {
-            name: name.as_ref().to_owned(),
-            password: password.as_ref().to_owned(),
+            current_config: Config::default(),
+            last_modified: LastModified::Unsaved,
         }
     }
 
-    pub fn check_password<T: AsRef<str>>(&self, password: T) -> bool {
-        let mut hasher = Sha256::new();
-        hasher.update(password.as_ref());
-        self.password == hex::encode(hasher.finalize().as_slice())
+    pub(crate) fn check_ip_registered(&self, ip: IpAddr) -> bool {
+        self
+        .current_config
+        .reg_hosts
+        .values()
+        .any(|reg_host| *reg_host == ip)
     }
-}
-
-impl PartialEq for User {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+    pub(crate) fn register_host(&mut self, name: &str, ip: IpAddr) -> Option<IpAddr> {
+        self.last_modified = LastModified::Unsaved;
+        self.current_config.reg_hosts.insert(name.to_owned(), ip)
     }
-}
 
-impl<T> From<(T, T)> for User
-where
-    T: Into<String>,
-{
-    fn from((name, password): (T, T)) -> Self {
-        Self {
-            name: name.into(),
-            password: password.into(),
+    pub(crate) fn get_host_by_name(&self, name: &str) -> Option<&IpAddr> {
+        self.current_config.reg_hosts.get(name)
+    }
+
+    pub(crate) fn number_of_workers(&self) -> u8 {
+        self.current_config.num_workers
+    }
+
+    pub(crate) fn set_start_port(&mut self, port: u16) {
+        self.last_modified = LastModified::Unsaved;
+        self.current_config.start_port = port;
+    }
+
+    pub(crate) fn log_dir(&self) -> &Path {
+        &self.current_config.log_dir
+    }
+
+    pub(crate) fn use_default(&mut self) {
+        self.current_config = Default::default();
+        self.last_modified = LastModified::Unsaved;
+    }
+
+    pub(crate) fn start_port(&self) -> u16 {
+        self.current_config.start_port
+    }
+
+    pub(crate) fn from_config_path() -> Self {
+        let logger = global::logger();
+
+        if let Ok(mut f) = File::open(global::config_path()) {
+            let last_modified = if let Ok(modified) = f.metadata().unwrap().modified() {
+                LastModified::LastModTime(modified)
+            } else {
+                logger.info(
+                    "Last modified time is not supported, config will always read from file.",
+                );
+                LastModified::Unsupported
+            };
+            let mut content = vec![];
+            if let Ok(content_size) = f.read_to_end(&mut content) {
+                if content_size != 0 {
+                    if let Ok(content_str) = std::str::from_utf8(&content) {
+                        if let Ok(config) = toml::from_str(content_str) {
+                            return Self {
+                                current_config: config,
+                                last_modified,
+                            };
+                        } else {
+                            logger.info("Deserialize config from file failed!");
+                        }
+                    } else {
+                        logger.info("Config file has non-UTF-8 content!");
+                    }
+                } else {
+                    logger.info("Empty config file! Create default.");
+                }
+            } else {
+                logger.info("Read config file failed, use default config instead.");
+            }
+        } else {
+            logger.info(format_args!(
+                "Open config file from path '{}' failed, use default config instead.",
+                global::config_path().to_string_lossy()
+            ));
+        }
+        return Self::default();
+    }
+
+    pub(crate) fn update_config(&mut self) {
+        if let Ok(mut f) = File::open(global::config_path()) {
+            let modified_res = f.metadata().unwrap().modified();
+            if let Ok(last_mod_time) = modified_res {
+                match self.last_modified {
+                    LastModified::LastModTime(time) if last_mod_time == time => return,
+                    LastModified::LastModTime(t) => {
+                        self.last_modified = LastModified::LastModTime(t)
+                    }
+                    LastModified::Unsaved => {
+                        self.save_to_file();
+                        return;
+                    },
+                    _ => (),
+                }
+            }
+            let mut bytes = vec![];
+            if let Ok(size) = f.read_to_end(&mut bytes) {
+                if size != 0 {
+                    if let Ok(config_str) = std::str::from_utf8(&bytes) {
+                        if let Ok(config) = toml::from_str::<Config>(config_str) {
+                            self.current_config = config.checked();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn inner_config(&mut self) -> &mut Config {
+        &mut self.current_config
+    }
+
+    fn save_to_file(&mut self) {
+        let mut f = std::fs::File::create(global::config_path())
+            .expect("Create or open config file failed, this should not happen!");
+        f.write_all(
+            toml::to_string(&self.current_config)
+                .expect("Config serialize to toml failed, this should not happen!")
+                .as_bytes(),
+        )
+        .expect("Unexpeced: write serialized config data to file failed!");
+        if let Ok(last_modified) = f.metadata().unwrap().modified() {
+            self.last_modified = LastModified::LastModTime(last_modified);
+        } else {
+            self.last_modified = LastModified::Unsupported;
         }
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Config {
-    log_path: PathBuf,
-    addr: SocketAddr,
+    log_dir: PathBuf,
+    start_port: u16,
     num_workers: u8,
+    /// Number of parallel connections to receive files
+    trans_parallel: u8,
     recv_dir: PathBuf,
-    users_dict: HashMap<u64, User>,
+    reg_hosts: HashMap<String, IpAddr>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        let mut log_path = PathHandler::get_default_log_dir().to_owned();
-        log_path.push(format!("{}.log", chrono::Local::now().date_naive()));
-        let mut recv_dir = PathHandler::get_home_path();
-        recv_dir.push("tinyfileshare_recv");
-        if !recv_dir.exists() {
-            std::fs::create_dir_all(&recv_dir).unwrap();
-        }
-
+        // log_dir.push(format!("{}.log", chrono::Local::now().date_naive()));
+        
         Self {
-            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT),
+            start_port: UNSPECIFIED_PORT,
             num_workers: DEFAULT_NUM_WORKERS,
-            log_path,
-            users_dict: HashMap::new(),
-            recv_dir,
+            log_dir: global::default_log_dir().to_owned(),
+            recv_dir: Self::default_recv_dir(),
+            trans_parallel: 0,
+            reg_hosts: HashMap::new(),
         }
     }
 }
 
 impl Config {
-    fn simple_hash(value: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        value.hash(&mut hasher);
-        return hasher.finish();
-    }
-
-    pub(crate) fn ip(&self) -> IpAddr {
-        self.addr.ip()
-    }
-
-    pub(crate) fn port(&self) -> u16 {
-        self.addr.port()
-    }
-    pub(crate) fn socket_addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    pub(crate) fn num_workers(&self) -> u8 {
-        self.num_workers
-    }
-
-    pub(crate) fn set_addr<A: Into<SocketAddr>>(&mut self, addr: A) {
-        self.addr = addr.into()
-    }
-
-    pub(crate) fn check_user(&self, name: &str) -> Option<&User> {
-        let v = Self::simple_hash(name);
-        self.users_dict.get(&v)
-    }
-
-    pub(crate) fn recv_dir(&self) -> &Path {
-        &self.recv_dir
-    }
-
-    pub(crate) fn from_file(path: &Path) -> Self {
-        let config_file_path = if !path.exists() {
-            let p = global::default_config_path();
-            global::logger().log(
-                "The specified config file not exist,try default config file.",
-                crate::log::LogLevel::Warn,
-            );
-            if !p.exists() {
-                global::logger().log(
-                    "Default config file not exist, create default config.",
-                    crate::log::LogLevel::Warn,
-                );
-                return Self::default();
-            }
-            p
+    fn checked_num_workers(num: u8) -> u8 {
+        if num == 0 || num > MAX_WORKERS {
+            DEFAULT_NUM_WORKERS
         } else {
-            path.to_owned()
-        };
-        let res = std::fs::read_to_string(config_file_path);
-        if let Err(e) = res {
-            global::logger().log(
-                format!(
-                    "Read config file failed, create default config. Detail: {}",
-                    e
-                ),
-                crate::log::LogLevel::Warn,
-            );
-            return Self::default();
+            num
         }
-        let des_res = toml::from_str(&res.unwrap());
-        if let Err(e) = des_res {
-            global::logger().log(
-                format!(
-                    "Deserialize config file content failed, create default config. Detail: {}",
-                    e
-                ),
-                crate::log::LogLevel::Warn,
-            );
-            return Self::default();
-        }
-        des_res.unwrap()
     }
 
-    #[allow(unused)]
-    pub(crate) fn add_user<T: Into<String>>(&mut self, name: T, password: T) {
-        let name_str = name.into();
-        self.users_dict.insert(
-            Self::simple_hash(&name_str),
-            User {
-                name: name_str,
-                password: password.into(),
-            },
-        );
+    fn default_recv_dir() -> PathBuf {
+        let mut recv_dir = global::home_path().to_path_buf();
+        recv_dir.push("tinyfileshare");
+        recv_dir.push("recv");
+        if !recv_dir.exists() {
+            std::fs::create_dir_all(&recv_dir).expect("Unexpected: create default receive directory failed!");
+        }
+        return recv_dir;
+    }
+    fn checked_log_dir(path: PathBuf) -> PathBuf {
+        if !path.is_dir() {
+            return global::default_log_dir().to_path_buf();
+        } else {
+            path
+        }
     }
 
-    pub(crate) fn store(&self) -> CommonResult<()> {
-        let mut f = std::fs::File::create(global::config_path())?;
-        f.write_all(
-            toml::to_string(&self)
-                .expect("config serialize to toml failed!")
-                .as_bytes(),
-        )?;
-        f.flush()?;
-        Ok(())
+    fn checked_trans_parallel(num: u8) -> u8 {
+        if num > MAX_PARALLEL {
+            MAX_PARALLEL
+        } else {
+            num
+        }
+    }
+
+    fn checked_recv_dir(mut path: PathBuf) -> PathBuf {
+        if path.is_dir() {
+            return path;
+        }
+        let logger = global::logger();
+        if path.is_file() || path.is_symlink() || !path.extension().is_none() {
+            logger.warn("Invalid recv_dir for config, use default instead.");
+            return Self::default_recv_dir();
+        }
+        if !path.exists() {
+            if std::fs::create_dir_all(&path).is_err() {
+                logger.warn("Create recv_dir directory failed, use default instead.");
+                return Self::default_recv_dir();
+            }
+        }
+        return path;
+    }
+
+    fn checked(mut self) -> Self {
+        self.log_dir = Self::checked_log_dir(self.log_dir);
+        self.trans_parallel = Self::checked_trans_parallel(self.trans_parallel);
+        self.num_workers = Self::checked_num_workers(self.num_workers);
+        self.recv_dir = Self::checked_recv_dir(self.recv_dir);
+        self
     }
 
     pub(crate) fn new(
-        ip: IpAddr,
         port: u16,
-        mut num_workers: u8,
+        num_workers: u8,
+        num_parallel: u8,
         log_dir: PathBuf,
-        users: Vec<User>,
         recv_dir: PathBuf,
     ) -> Self {
-        num_workers = if num_workers == 0 || num_workers > 120 {
-            DEFAULT_NUM_WORKERS
-        } else {
-            num_workers
-        };
-        let mut users_dict = HashMap::new();
-        for u in users {
-            users_dict.insert(Self::simple_hash(&u.name), u);
-        }
         Self {
-            log_path: log_dir,
-            addr: SocketAddr::new(ip, port),
-            num_workers,
-            users_dict,
+            log_dir,
+            start_port: port,
+            num_workers: Self::checked_num_workers(num_workers),
+            trans_parallel: Self::checked_trans_parallel(num_parallel),
             recv_dir,
+            ..Default::default()
         }
     }
 }
@@ -215,7 +284,7 @@ impl Config {
 mod tests {
     use std::{fs::File, io::Write, net::Ipv4Addr, path::PathBuf};
 
-    use crate::global;
+    use crate::{config::ConfigStore, global};
 
     use super::Config;
 
@@ -236,38 +305,53 @@ mod tests {
     #[test]
     fn serial_test() {
         let config = Config::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 3, 1)),
             2082,
             0,
+            1,
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
-            vec![("feyn", "387eccc3").into()],
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare_recv"),
         );
         // config.add_user("feyn", "387eccc3");
-        global::set_config_path(TEMP_CONF_PATH);
-        let res = config.store();
-        assert!(res.is_ok());
+        global::set_config_path(TEMP_CONF_PATH.into()).expect("Set config path failed");
+        let _res = ConfigStore {
+            current_config: config,
+            last_modified: super::LastModified::Unsaved,
+        }
+        .save_to_file();
     }
 
     #[test]
     fn deserial_test() {
         let config = Config::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 3, 1)),
             2082,
             0,
+            1,
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
-            vec![("feyn", "387eccc3").into()],
             PathBuf::from("C:/Users/feyn/.cache/tinyfileshare_recv"),
         );
         // config.add_user("feyn", "387eccc3");
-        global::set_config_path(TEMP_CONF_PATH);
-        let read_config = Config::from_file(global::config_path());
-        assert_eq!(read_config, config);
+        global::set_config_path(TEMP_CONF_PATH.into()).expect("Set config path failed");
+        let read_config = ConfigStore::from_config_path();
+        assert_eq!(read_config.current_config, config);
     }
 
     #[test]
     fn read_file_err_test() {
         let res = std::fs::read_to_string("C:\\Users\\feyn\\.cache\\tinyfileshare\\");
         assert_eq!(std::io::ErrorKind::NotFound, res.unwrap_err().kind())
+    }
+
+    #[test]
+    fn write_last_test() {
+        let mut f = File::options()
+            .append(true)
+            .read(true)
+            .open("C:/Users/feyn/.cache/tinyfileshare/temp.txt")
+            .unwrap();
+        let modified_before = f.metadata().unwrap().modified().unwrap();
+        f.write_all(b"\r\nnew content\r\n").unwrap();
+        // f.flush().unwrap();
+        let modified_after = f.metadata().unwrap().modified().unwrap();
+        assert_ne!(modified_after, modified_before);
     }
 }

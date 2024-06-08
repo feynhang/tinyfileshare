@@ -1,103 +1,162 @@
 use std::{
-    net::{IpAddr, SocketAddr, TcpListener},
-    path::{Path, MAIN_SEPARATOR},
+    ffi::OsStr,
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
 };
 
-use crossbeam::channel::bounded;
+use interprocess::local_socket::{
+    traits::tokio::Listener, GenericNamespaced, ListenerOptions, NamespacedNameType,
+};
+use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{
-    config::Config, dispatcher::Dispatcher, error::CommonError, global, workers::Workers, CommonResult
+    config::{Config, ConfigStore},
+    global, handler, CommonResult,
 };
 
-static mut RUNNING: bool = false;
+const NAME_IPC: &str = "tinyfileshare.localsock";
 
+fn join_set() -> &'static mut JoinSet<()> {
+    static mut JOIN_SET: Option<JoinSet<()>> = None;
+    unsafe { JOIN_SET.get_or_insert(JoinSet::new()) }
+}
 
-fn check_running() {
+static mut CONFIG: Option<ConfigStore> = None;
+
+pub(crate) fn config_store() -> &'static mut ConfigStore {
     unsafe {
-        if RUNNING {
-            panic!("Illegal function call!!!");
+        match CONFIG.as_mut() {
+            Some(conf_store) => {
+                conf_store.update_config();
+                conf_store
+            }
+            None => {
+                CONFIG = Some(ConfigStore::from_config_path());
+                CONFIG.as_mut().unwrap()
+            }
         }
-        RUNNING = true;
     }
 }
 
-fn check_path(path_for_check: &Path) -> CommonResult<&Path> {
-    const PATH_INVALID_CHAR: [char; 9] = ['\\', '*', '?', '/', '"', '<', '>', '|', ':'];
-    if path_for_check.is_symlink() {
-        return Err(CommonError::PathErr(
-            "symbolic links for config path is not supported!".into(),
-        ));
+async fn try_join() {
+    while join_set().len() > config_store().number_of_workers() as usize {
+        if let Some(Err(e)) = join_set().join_next().await {
+            global::logger().error(format_args!(
+                "A local request handler task join failed: {}",
+                e
+            ));
+        }
     }
-    let path_str = path_for_check.to_str();
-    if path_str.is_none() {
-        return Err(CommonError::PathErr(format!(
-            "The path is invalid unicode! path: {:?}",
-            path_for_check
-        )));
-    }
-    let invalid = path_str
-        .unwrap()
-        .split(MAIN_SEPARATOR)
-        .any(|part| part.chars().any(|ch| PATH_INVALID_CHAR.contains(&ch)));
-    if invalid {
-        return Err(CommonError::PathErr(
-            r#"Invalid path! Path should not contain these chars: \, *, ?, /, ", <, >, |, : "#
-                .into(),
-        ));
-    }
-
-    Ok(path_for_check)
 }
 
-fn start_inner() -> CommonResult<()> {
+async fn start_local_daemon() {
+    let name_res = GenericNamespaced::map(OsStr::new(NAME_IPC).into());
+    if let Ok(listen_name) = name_res {
+        let listener_res = ListenerOptions::new().name(listen_name).create_tokio();
+        if let Ok(local_listener) = listener_res {
+            loop {
+                let conn = match local_listener.accept().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        global::logger().warn(format_args!(
+                            "There was an error with an incoming connection: {}",
+                            e
+                        ));
+                        continue;
+                    }
+                };
+                try_join().await;
+                join_set().spawn(async move {
+                    if let Err(e) = handler::handle_local(conn).await {
+                        global::logger().error(format_args!(
+                            "Error occurred while handling a local process connection: {}",
+                            e
+                        ));
+                    }
+                });
+            }
+        } else {
+            let err = listener_res.unwrap_err();
+            if err.kind() == tokio::io::ErrorKind::AddrInUse {
+                global::logger().error(format_args!("Error: could not start server because the socket file is occupied. Please check if {} is in use by another process and try again.", NAME_IPC));
+            } else {
+                global::logger().error(format_args!(
+                    "Error occurred while create ipc listener: {}",
+                    err
+                ));
+            }
+            std::process::exit(1);
+        }
+    } else {
+        global::logger().error(format_args!(
+            "Error occurred while create ipc socket name: {}",
+            name_res.unwrap_err()
+        ));
+        std::process::exit(1);
+    }
+}
+
+async fn start_inner(ip_addr: IpAddr) -> CommonResult<()> {
+    let config = config_store();
     let default_config = Config::default();
     let listener;
-    let listen_res = TcpListener::bind(global::config().socket_addr());
+    let listen_res =
+        TcpListener::bind((ip_addr, config.start_port())).await;
     if let Err(e) = listen_res {
-        if *global::config() == default_config {
+        if *config.inner_config() == default_config {
             return Err(e.into());
         }
-        *global::config() = default_config;
-        listener = TcpListener::bind(global::config().socket_addr())?;
+        config.use_default();
+        listener = TcpListener::bind((ip_addr, config.start_port())).await?;
     } else {
         listener = listen_res.unwrap();
     }
     let local_addr = listener.local_addr().unwrap();
-    global::config().set_addr(local_addr);
-    global::config().store()?;
-    let (handler_tx, handler_rx) = bounded(global::config().num_workers() as usize + 1);
-    let mut dispatcher = Dispatcher::new(handler_tx);
-    _ = Workers::start(handler_rx);
+    config.set_start_port(local_addr.port());
+    ctrlc::set_handler(|| {
+        println!("CtrlC Pressed, Exiting forced now!");
+        std::process::exit(0);
+    })
+    .expect("Set Ctrl+C event handler failed!");
+    tokio::spawn(start_local_daemon());
     loop {
-        let accept_res  =listener.accept();
-        if let Err(e) = accept_res  {
-            global::logger().log(format_args!("Accept a connection failed!\nDetail: {}", e), crate::log::LogLevel::Error);
-            continue;
+        match listener.accept().await {
+            Ok((socket, addr)) => {
+                try_join().await;
+                join_set().spawn(async move {
+                    if let Err(e) = handler::handle_remote(socket, addr).await {
+                        global::logger().error(format_args!(
+                            "Error occurred while handling a remote connection: {}",
+                            e
+                        ));
+                    }
+                });
+            }
+            Err(e) => {
+                global::logger().log(
+                    format_args!("Accept connection error: {}", e),
+                    crate::log::LogLevel::Error,
+                );
+            }
         }
-        let (conn, addr) = accept_res.unwrap();
-        dispatcher.dispatch(conn, addr);
     }
+}
+
+pub async fn start_with_config_path<P: Into<PathBuf>>(config_path: P) -> CommonResult<()> {
+    global::set_config_path(config_path.into())?;
+    *config_store() = ConfigStore::from_config_path();
+    start_inner(IpAddr::V4(Ipv4Addr::UNSPECIFIED)).await?;
     Ok(())
 }
 
-pub fn start_with_config_path<P: AsRef<Path>>(config_path: P) -> CommonResult<()> {
-    check_running();
-    crate::global::set_config_path(check_path(config_path.as_ref())?);
-    *crate::global::config() = Config::from_file(config_path.as_ref());
-    start_inner()?;
+pub async fn start_default() -> CommonResult<()> {
+    start_inner(IpAddr::V4(Ipv4Addr::UNSPECIFIED)).await?;
     Ok(())
 }
 
-pub fn start_default() -> CommonResult<()> {
-    check_running();
-    start_inner()?;
-    Ok(())
-}
-
-pub fn start_on(addr: SocketAddr) -> CommonResult<()> {
-    check_running();
-    crate::global::config().set_addr(addr);
-    start_inner()?;
+pub async fn start_on(addr: std::net::SocketAddr) -> CommonResult<()> {
+    config_store().set_start_port(addr.port());
+    start_inner(addr.ip()).await?;
     Ok(())
 }
 
@@ -105,7 +164,7 @@ pub fn start_on(addr: SocketAddr) -> CommonResult<()> {
 mod tests {
     use std::{mem::transmute, path::PathBuf};
 
-    use crate::handler::PathHandler;
+    use crate::global;
 
     #[test]
     fn ptr_test() {
@@ -138,7 +197,7 @@ mod tests {
 
     #[test]
     fn create_dir_all_test() {
-        let mut home_path = PathBuf::from(PathHandler::get_home_path());
+        let mut home_path = PathBuf::from(global::home_path());
         home_path.push(".test");
         home_path.push("innerdir1");
         home_path.push("inner_dir2");

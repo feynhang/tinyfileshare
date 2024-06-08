@@ -4,99 +4,167 @@ pub mod response;
 use error::CommonError;
 
 pub mod config;
-pub(crate) mod dispatcher;
+
 pub mod error;
 pub(crate) mod filedata;
 pub(crate) mod handler;
 pub(crate) mod log;
 pub mod server;
 pub(crate) mod util;
-pub(crate) mod workers;
 
 pub type CommonResult<T> = Result<T, CommonError>;
 
 // pub type CommonResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-#[allow(unused)]
-mod global {
-    use crate::config::Config;
+pub mod consts {
+    pub const NEW_LINE: &str = "\r\n";
+    pub mod request_head {
+        pub const RECV: u8 = b'R';
+        pub const SHARE: u8 = b'S';
+        pub const HOST_REG: u8 = b'H';
+        pub const PORT_PREPARE: u8 = b'P';
+        pub const TEST_REACHABLE: u8 = b'?';
+    }
+    pub mod response_head {
+        pub const INVALID_PATHS: &str = "INVALID_PATHS";
+        pub const HOST_REACHED: &str = "1";
+        pub const REGISTERED_SUCCESS: &str = "REGISTER_SUCCESS";
+        pub const PROGRESS: &str = "PROGRESS";
+        pub const REPLACED_HOST: &str = "REPLACED";
+        pub const RECV_FINISHED:&str = "RECV_FINISHED";
+        pub const INVALID_REQUEST: &str = "INVALID_REQUEST";
+        pub const CONNECTIONS_OVERLOAD: &str = "CONNECTION_OVERLOAD";
+        pub const LISTENER_STARTED: &str = "LISTENER_STARTED";
+        pub const PORT_CONFIRM: &str = "PORT_CONFIRM";
+        pub const ALL_PATHS_INVALID: &str = "ALL_PATHS_INVALID";
+        pub const ALL_PATHS_RECEIVED: &str = "ALL_PATHS_RECEIVED";
+        pub const CONNECT_HOST_FAILED: &str = "CONNECT_HOST_FAILED";
+        pub const UNREGISTERED_HOST: &str = "UNREGISTERED_HOST";
+    }
+}
 
-    use crate::log::LogLevel;
-    use crate::log::Logger;
-    use std::collections::HashMap;
+mod global {
     use std::ffi::OsStr;
-    use std::io::Stdout;
-    use std::net::IpAddr;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    pub const BUF_SIZE: usize = 4096;
-    pub const NEWLINE: &str = "\r\n";
+    use crate::error::CommonError;
+    use crate::log::Logger;
+    use crate::log::LoggerKind;
+    use crate::CommonResult;
+
+    // pub const BUF_SIZE: usize = 4096;
+    // pub const NEWLINE: &str = "\r\n";
     pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
     static mut CONFIG_PATH: Option<PathBuf> = None;
 
-    fn fix_path(mut path: PathBuf) -> PathBuf {
-        if path.is_file() || path.extension() == Some(OsStr::new("toml")) {
-            return path;
-        }
-        if !path.is_dir() {
-            std::fs::create_dir_all(&path).unwrap();
-        }
-        path.push(DEFAULT_CONFIG_FILE_NAME);
-        return path;
+    static HOME_PATH: OnceLock<PathBuf> = OnceLock::new();
+    static mut GLOBAL_LOGGER: Option<Logger> = None;
+
+    #[cfg(windows)]
+    pub(crate) fn home_path() -> &'static Path {
+        HOME_PATH.get_or_init(|| std::path::PathBuf::from(std::env::var("USERPROFILE").unwrap()))
     }
 
-    pub(crate) fn config() -> &'static mut Config {
-        static mut CONFIG: Option<Config> = None;
-        unsafe { CONFIG.get_or_insert(Config::default()) }
+    #[cfg(not(windows))]
+    pub(crate) fn home_path() -> std::path::PathBuf {
+        HOME_PATH.get_or_init(std::path::PathBuf::from(std::env::var("HOME").unwrap()))
     }
 
-    pub(crate) fn set_config_path<P: AsRef<Path>>(path: P) {
+    pub fn exec_dir_path() -> &'static Path {
+        static EXE_DIR: OnceLock<PathBuf> = OnceLock::new();
+        EXE_DIR.get_or_init(|| {
+            let exe_path = std::env::current_exe().unwrap();
+            let str_exe_path = exe_path.to_str().unwrap();
+            std::path::PathBuf::from(
+                &str_exe_path[0..str_exe_path.rfind(std::path::MAIN_SEPARATOR).unwrap()],
+            )
+        })
+    }
+
+    pub(crate) fn set_config_path(path: PathBuf) -> CommonResult<()> {
         unsafe {
-            CONFIG_PATH = Some(fix_path(path.as_ref().to_owned()));
+            CONFIG_PATH = Some(check_path(path)?);
         }
-    }
-    pub(crate) fn config_path() -> &'static Path {
-        unsafe { CONFIG_PATH.get_or_insert(default_config_path()) }
+        Ok(())
     }
 
-    pub(crate) fn default_config_path() -> PathBuf {
-        let mut path = crate::handler::PathHandler::get_home_path();
-        path.push(DEFAULT_CONFIG_DIR_NAME);
-        if !path.exists() {
-            std::fs::create_dir_all(&path).unwrap();
+    fn check_path(mut path_for_check: PathBuf) -> CommonResult<PathBuf> {
+        if path_for_check.is_symlink() {
+            return Err(CommonError::ConfigPathErr(format!(
+                "Symbolic link for config path is not supported!"
+            )));
         }
-        path.push(DEFAULT_CONFIG_FILE_NAME);
-        path
-    }
+        if path_for_check.is_file() || path_for_check == default_config_path() {
+            return Ok(path_for_check);
+        }
 
-    pub(crate) fn registered_hosts() -> &'static mut HashMap<String, IpAddr> {
-        static mut REG_HOSTS: OnceLock<HashMap<String, IpAddr>> = OnceLock::new();
-        unsafe {
-            let hosts = REG_HOSTS.get_mut();
-            if hosts.is_none() {
-                REG_HOSTS.set(HashMap::new()).unwrap();
+        fn try_create_dir(dir_path: &Path) -> CommonResult<()> {
+            if !dir_path.exists() && std::fs::create_dir_all(&dir_path).is_err() {
+                return Err(CommonError::ConfigPathErr(format!(
+                    "Create dir failed: {}, please check it validity!",
+                    dir_path.to_string_lossy()
+                )));
             }
-            hosts.unwrap()
+            Ok(())
+        }
+
+        if let Some(ext_name) = path_for_check.extension() {
+            if ext_name == OsStr::new("toml") {
+                path_for_check.pop();
+                try_create_dir(&path_for_check)?;
+                return Ok(path_for_check);
+            }
+        }
+        if !path_for_check.is_dir() {
+            try_create_dir(&path_for_check)?;
+        }
+        path_for_check.push(DEFAULT_CONFIG_FILE_NAME);
+        Ok(path_for_check)
+    }
+
+    pub(crate) fn config_path() -> &'static Path {
+        unsafe { CONFIG_PATH.get_or_insert(default_config_path().to_path_buf()) }
+    }
+
+    pub(crate) fn default_config_path() -> &'static Path {
+        static mut DEFAULT_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
+        unsafe {
+            DEFAULT_CONFIG_PATH.get_or_init(|| {
+                let mut path = home_path().to_owned();
+                path.push(DEFAULT_CONFIG_DIR_NAME);
+                if !path.exists() {
+                    std::fs::create_dir_all(&path).unwrap();
+                }
+                path.push(DEFAULT_CONFIG_FILE_NAME);
+                path
+            })
         }
     }
 
-    #[cfg(feature = "file_log")]
-    pub(crate) fn logger() -> &'static mut Logger<std::fs::File> {
-        static mut GLOBAL_LOGGER: Option<Logger<std::fs::File>> = None;
-        unsafe { GLOBAL_LOGGER.get_or_insert(Logger::new(None)) }
+    pub(crate) fn default_log_dir() -> &'static Path {
+        static mut DEFAULT_LOG_DIR: Option<PathBuf> = None;
+        unsafe {
+            DEFAULT_LOG_DIR.get_or_insert_with(|| {
+                let mut default_log_dir = exec_dir_path().to_path_buf();
+                default_log_dir.push("log");
+                default_log_dir
+            })
+        }
     }
 
-    #[cfg(not(feature = "file_log"))]
-    pub(crate) fn logger() -> &'static mut Logger<Stdout> {
-        static mut GLOBAL_LOGGER: Option<Logger<Stdout>> = None;
-        unsafe { GLOBAL_LOGGER.get_or_insert(Logger::new()) }
+    pub(crate) fn set_logger_kind(logger_kind: LoggerKind) {
+        unsafe {
+            GLOBAL_LOGGER = Some(match logger_kind {
+                LoggerKind::FileLogger => Logger::file_logger(),
+                LoggerKind::ConsoleLogger => Logger::console_logger(),
+            })
+        }
     }
 
-    pub(crate) fn log_level() -> LogLevel {
-        static mut LOG_LEVEL: &mut LogLevel = &mut LogLevel::Info;
-        unsafe { *LOG_LEVEL }
+    pub(crate) fn logger() -> &'static mut Logger {
+        unsafe { GLOBAL_LOGGER.get_or_insert(Logger::console_logger()) }
     }
 }
 
@@ -107,35 +175,14 @@ mod tests {
     use std::hash::Hash;
     use std::hash::Hasher;
     use std::io::BufRead;
-    use std::io::BufReader;
     use std::io::Cursor;
-    use std::io::Read;
 
     use chrono::Datelike;
-    use sha2::Digest;
-    use sha2::Sha256;
-
-    use crate::global;
-
-    #[test]
-    fn sha2_string_test() {
-        let s1 = "19900925_fliny_iiiipadjfemg".to_owned();
-        let s2 = "19900925_fliny_iiiipadjfemg".to_string();
-        let mut s1_hasher = Sha256::new();
-        s1_hasher.update(s1);
-        let s1_res = s1_hasher.finalize();
-        let mut s2_hasher = Sha256::new();
-        s2_hasher.update(s2);
-        let s2_res = s2_hasher.finalize();
-        let s1_bytes = s1_res.as_slice();
-        assert_eq!(s1_bytes, &s2_res[..]);
-        println!("passwd hash result = {:?}", hex::encode(s1_bytes));
-    }
 
     #[test]
     fn std_hash_test() {
-        let s1 = "19900925_fliny_iiiipadjfemg".to_owned();
-        let s2 = String::from("19900925_fliny_iiiipadjfemg");
+        let s1 = "19900925_fliny_iiiipadjfemg";
+        let s2 = "19900925_fliny_iiiipadjfemg";
         let mut s1_hasher = DefaultHasher::default();
         s1.hash(&mut s1_hasher);
         let s1_hashvalue = s1_hasher.finish();
@@ -161,12 +208,12 @@ mod tests {
     #[test]
     fn test_read_line() {
         let content = "inner content line 1\r\n\r\nline content 3";
-        let cursor = Cursor::new(content);
-        let mut reader = BufReader::with_capacity(global::BUF_SIZE, cursor);
+        let mut cursor = Cursor::new(content);
+
         let mut line = String::new();
         let mut i = 0;
 
-        while let Ok(size) = reader.read_line(&mut line) {
+        while let Ok(size) = cursor.read_line(&mut line) {
             if size == 0 {
                 break;
             }
