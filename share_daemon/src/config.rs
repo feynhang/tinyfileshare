@@ -1,4 +1,5 @@
 use std::{
+    borrow::BorrowMut,
     collections::HashMap,
     fs::File,
     io::{Read, Write},
@@ -7,14 +8,14 @@ use std::{
     time::SystemTime,
 };
 
-use crate::global;
+use tokio::sync::RwLock;
+
+use crate::{error::CommonError, global, CommonResult};
 
 pub(crate) const UNSPECIFIED_PORT: u16 = 0;
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
 pub(crate) const MAX_WORKERS: u8 = 120;
 pub(crate) const MAX_PARALLEL: u8 = 4;
-
-pub(crate) const DEFAULT_CLIENT_PORT: u16 = 10020;
 
 pub(crate) struct ConfigStore {
     current_config: Config,
@@ -46,18 +47,19 @@ impl ConfigStore {
     }
 
     pub(crate) fn check_ip_registered(&self, ip: IpAddr) -> bool {
-        self
-        .current_config
-        .reg_hosts
-        .values()
-        .any(|reg_host| *reg_host == ip)
+        self.current_config
+            .reg_hosts
+            .values()
+            .any(|reg_host| *reg_host == ip)
     }
+
+    #[allow(unused)]
     pub(crate) fn register_host(&mut self, name: &str, ip: IpAddr) -> Option<IpAddr> {
         self.last_modified = LastModified::Unsaved;
         self.current_config.reg_hosts.insert(name.to_owned(), ip)
     }
 
-    pub(crate) fn get_host_by_name(&self, name: &str) -> Option<&IpAddr> {
+    pub(crate) fn get_ip_by_name(&self, name: &str) -> Option<&IpAddr> {
         self.current_config.reg_hosts.get(name)
     }
 
@@ -125,54 +127,48 @@ impl ConfigStore {
         return Self::default();
     }
 
-    pub(crate) fn update_config(&mut self) {
-        if let Ok(mut f) = File::open(global::config_path()) {
-            let modified_res = f.metadata().unwrap().modified();
-            if let Ok(last_mod_time) = modified_res {
-                match self.last_modified {
-                    LastModified::LastModTime(time) if last_mod_time == time => return,
-                    LastModified::LastModTime(t) => {
-                        self.last_modified = LastModified::LastModTime(t)
-                    }
-                    LastModified::Unsaved => {
-                        self.save_to_file();
-                        return;
-                    },
-                    _ => (),
+    pub(crate) fn try_update_config(&mut self) -> CommonResult<()> {
+        let f_lock = RwLock::new(File::open(global::config_path())?);
+        let mut f_guard = f_lock.blocking_write();
+        let modified_res = f_guard.metadata().unwrap().modified();
+        if let Ok(last_mod_time) = modified_res {
+            match self.last_modified {
+                LastModified::LastModTime(time) if last_mod_time == time => return Ok(()),
+                LastModified::LastModTime(t) => self.last_modified = LastModified::LastModTime(t),
+                LastModified::Unsaved => {
+                    self.save_to_file()?;
+                    return Ok(());
                 }
-            }
-            let mut bytes = vec![];
-            if let Ok(size) = f.read_to_end(&mut bytes) {
-                if size != 0 {
-                    if let Ok(config_str) = std::str::from_utf8(&bytes) {
-                        if let Ok(config) = toml::from_str::<Config>(config_str) {
-                            self.current_config = config.checked();
-                            return;
-                        }
-                    }
-                }
+                _ => (),
             }
         }
+        let mut bytes = vec![];
+        if f_guard.read_to_end(&mut bytes)? > 0 {
+            let config = toml::from_str::<Config>(std::str::from_utf8(&bytes)?)?;
+            self.current_config = config.checked();
+        } else {
+            self.save_to_file()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn inner_config(&mut self) -> &mut Config {
         &mut self.current_config
     }
 
-    fn save_to_file(&mut self) {
-        let mut f = std::fs::File::create(global::config_path())
-            .expect("Create or open config file failed, this should not happen!");
+    fn save_to_file(&mut self) -> std::io::Result<()> {
+        let mut f = std::fs::File::create(global::config_path())?;
         f.write_all(
             toml::to_string(&self.current_config)
                 .expect("Config serialize to toml failed, this should not happen!")
                 .as_bytes(),
-        )
-        .expect("Unexpeced: write serialized config data to file failed!");
-        if let Ok(last_modified) = f.metadata().unwrap().modified() {
+        )?;
+        if let Ok(last_modified) = f.metadata()?.modified() {
             self.last_modified = LastModified::LastModTime(last_modified);
         } else {
             self.last_modified = LastModified::Unsupported;
         }
+        Ok(())
     }
 }
 
@@ -183,19 +179,19 @@ pub struct Config {
     num_workers: u8,
     /// Number of parallel connections to receive files
     trans_parallel: u8,
-    recv_dir: PathBuf,
+    save_dir: PathBuf,
     reg_hosts: HashMap<String, IpAddr>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         // log_dir.push(format!("{}.log", chrono::Local::now().date_naive()));
-        
+
         Self {
             start_port: UNSPECIFIED_PORT,
             num_workers: DEFAULT_NUM_WORKERS,
             log_dir: global::default_log_dir().to_owned(),
-            recv_dir: Self::default_recv_dir(),
+            save_dir: Self::default_save_dir(),
             trans_parallel: 0,
             reg_hosts: HashMap::new(),
         }
@@ -211,14 +207,15 @@ impl Config {
         }
     }
 
-    fn default_recv_dir() -> PathBuf {
-        let mut recv_dir = global::home_path().to_path_buf();
-        recv_dir.push("tinyfileshare");
-        recv_dir.push("recv");
-        if !recv_dir.exists() {
-            std::fs::create_dir_all(&recv_dir).expect("Unexpected: create default receive directory failed!");
+    fn default_save_dir() -> PathBuf {
+        let mut save_dir = global::home_path().to_path_buf();
+        save_dir.push("tinyfileshare");
+        save_dir.push("recv");
+        if !save_dir.exists() {
+            std::fs::create_dir_all(&save_dir)
+                .expect("Unexpected: create default receive directory failed!");
         }
-        return recv_dir;
+        return save_dir;
     }
     fn checked_log_dir(path: PathBuf) -> PathBuf {
         if !path.is_dir() {
@@ -236,19 +233,19 @@ impl Config {
         }
     }
 
-    fn checked_recv_dir(mut path: PathBuf) -> PathBuf {
+    fn checked_save_dir(path: PathBuf) -> PathBuf {
         if path.is_dir() {
             return path;
         }
         let logger = global::logger();
         if path.is_file() || path.is_symlink() || !path.extension().is_none() {
-            logger.warn("Invalid recv_dir for config, use default instead.");
-            return Self::default_recv_dir();
+            logger.warn("Invalid save_dir for config, use default instead.");
+            return Self::default_save_dir();
         }
         if !path.exists() {
             if std::fs::create_dir_all(&path).is_err() {
-                logger.warn("Create recv_dir directory failed, use default instead.");
-                return Self::default_recv_dir();
+                logger.warn("Create save_dir directory failed, use default instead.");
+                return Self::default_save_dir();
             }
         }
         return path;
@@ -258,23 +255,24 @@ impl Config {
         self.log_dir = Self::checked_log_dir(self.log_dir);
         self.trans_parallel = Self::checked_trans_parallel(self.trans_parallel);
         self.num_workers = Self::checked_num_workers(self.num_workers);
-        self.recv_dir = Self::checked_recv_dir(self.recv_dir);
+        self.save_dir = Self::checked_save_dir(self.save_dir);
         self
     }
 
+    #[allow(unused)]
     pub(crate) fn new(
         port: u16,
         num_workers: u8,
         num_parallel: u8,
         log_dir: PathBuf,
-        recv_dir: PathBuf,
+        save_dir: PathBuf,
     ) -> Self {
         Self {
             log_dir,
             start_port: port,
             num_workers: Self::checked_num_workers(num_workers),
             trans_parallel: Self::checked_trans_parallel(num_parallel),
-            recv_dir,
+            save_dir: save_dir,
             ..Default::default()
         }
     }
@@ -282,7 +280,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, net::Ipv4Addr, path::PathBuf};
+    use std::{fs::File, io::Write, path::PathBuf};
 
     use crate::{config::ConfigStore, global};
 

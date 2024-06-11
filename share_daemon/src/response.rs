@@ -36,31 +36,32 @@ pub enum FileRecvError {
     IncorrectFileSize,
 }
 
+
 impl std::fmt::Display for SuccessResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SuccessResponse::ListenerStarted => {
-                write!(f, "{}", consts::response_head::LISTENER_STARTED)
+                write!(f, "{}", consts::reply::LISTENER_STARTED)
             }
             SuccessResponse::PortConfirm(port) => {
-                write!(f, "{} {}", consts::response_head::PORT_CONFIRM, *port)
+                write!(f, "{} {}", consts::reply::PORT_CONFIRM, *port)
             }
             SuccessResponse::FileSendProgress(progress) => write!(f, " {}", progress),
             SuccessResponse::RegisterSuccess => write!(f, ""),
             SuccessResponse::ReceiveFinished => {
-                write!(f, "{}", consts::response_head::RECV_FINISHED)
+                write!(f, "{}", consts::reply::RECV_FINISHED)
             }
-            SuccessResponse::HostReached => write!(f, "{}", consts::response_head::HOST_REACHED),
+            SuccessResponse::HostReached => write!(f, "{}", consts::reply::HOST_REACHED),
             SuccessResponse::InvalidPaths(paths) => write!(
                 f,
                 "{}\r\n\r\n{}",
-                consts::response_head::INVALID_PATHS,
+                consts::reply::INVALID_PATHS,
                 paths.as_slice().join("\r\n")
             ),
             SuccessResponse::ReplacedHost(ip) => {
-                write!(f, "{} {}", consts::response_head::REPLACED_HOST, *ip)
+                write!(f, "{} {}", consts::reply::REPLACED_IP, *ip)
             }
-            SuccessResponse::AllPathsReceived => write!(f, "{}", consts::response_head::ALL_PATHS_RECEIVED),
+            SuccessResponse::AllPathsReceived => write!(f, "{}", consts::reply::ALL_PATHS_RECEIVED),
         }
     }
 }
@@ -69,22 +70,22 @@ impl std::fmt::Display for FailureResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FailureResponse::InvalidRequest => {
-                write!(f, "{}", consts::response_head::INVALID_REQUEST)
+                write!(f, "{}", consts::reply::INVALID_REQUEST)
             }
             FailureResponse::UnregisteredHost => {
-                write!(f, "{}", consts::response_head::UNREGISTERED_HOST)
+                write!(f, "{}", consts::reply::UNREGISTERED_HOST)
             }
             FailureResponse::AllPathsInvalid => {
-                write!(f, "{}", consts::response_head::ALL_PATHS_INVALID)
+                write!(f, "{}", consts::reply::ALL_PATHS_INVALID)
             }
             FailureResponse::ConnectionsOverload => {
-                write!(f, "{}", consts::response_head::CONNECTIONS_OVERLOAD)
+                write!(f, "{}", consts::reply::CONNECTIONS_OVERLOAD)
             }
             FailureResponse::ConnectHostFailed(hostname, ip) => {
                 write!(
                     f,
                     "{} {}:{}",
-                    consts::response_head::CONNECT_HOST_FAILED,
+                    consts::reply::CONNECT_HOST_FAILED,
                     hostname,
                     *ip
                 )

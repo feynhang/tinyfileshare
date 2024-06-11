@@ -27,7 +27,9 @@ pub(crate) fn config_store() -> &'static mut ConfigStore {
     unsafe {
         match CONFIG.as_mut() {
             Some(conf_store) => {
-                conf_store.update_config();
+                if let Err(e) = conf_store.try_update_config() {
+                    global::logger().error(format_args!("Update config in config_store failed! Detail: {}", e));
+                }
                 conf_store
             }
             None => {

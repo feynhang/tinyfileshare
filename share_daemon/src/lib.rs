@@ -18,19 +18,21 @@ pub type CommonResult<T> = Result<T, CommonError>;
 
 pub mod consts {
     pub const NEW_LINE: &str = "\r\n";
-    pub mod request_head {
-        pub const RECV: u8 = b'R';
-        pub const SHARE: u8 = b'S';
-        pub const HOST_REG: u8 = b'H';
-        pub const PORT_PREPARE: u8 = b'P';
-        pub const TEST_REACHABLE: u8 = b'?';
+    pub mod request {
+        pub const RECV: u8 = 0x03;
+        pub const SHARE: u8 = 0x01;
+        pub const HOST_REG: u8 = 0x02;
+        pub const PORT_PREPARE: u8 = 0x02;
+        pub const TEST_REACHABLE: u8 = 0x01;
     }
-    pub mod response_head {
+    pub mod reply {
+        pub const UNEXPECTED_RESPONSE: &str = "UNEXPECTED_RESPONSE";
+        pub const UNREACHABLE_HOST: &str = "UNREACHABLE_HOST";
         pub const INVALID_PATHS: &str = "INVALID_PATHS";
         pub const HOST_REACHED: &str = "1";
         pub const REGISTERED_SUCCESS: &str = "REGISTER_SUCCESS";
         pub const PROGRESS: &str = "PROGRESS";
-        pub const REPLACED_HOST: &str = "REPLACED";
+        pub const REPLACED_IP: &str = "REPLACED";
         pub const RECV_FINISHED:&str = "RECV_FINISHED";
         pub const INVALID_REQUEST: &str = "INVALID_REQUEST";
         pub const CONNECTIONS_OVERLOAD: &str = "CONNECTION_OVERLOAD";

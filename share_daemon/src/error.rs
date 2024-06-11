@@ -1,3 +1,5 @@
+use std::str::Utf8Error;
+
 use crate::response::FailureResponse;
 
 #[derive(Debug)]
@@ -6,6 +8,8 @@ pub enum CommonError {
     IoErr(std::io::Error),
     ConfigPathErr(String),
     FailureResp(FailureResponse),
+    Utf8Err(Utf8Error),
+    DeserializeErr(toml::de::Error),
     SimpleError(String),
 }
 
@@ -26,19 +30,33 @@ impl std::fmt::Display for IpcError {
     }
 }
 
+impl From<toml::de::Error> for CommonError {
+    fn from(value: toml::de::Error) -> Self {
+        Self::DeserializeErr(value)
+    }
+}
+
+impl From<Utf8Error> for CommonError {
+    fn from(value: Utf8Error) -> Self {
+        Self::Utf8Err(value)
+    }
+}
+
+
+
 impl From<FailureResponse> for CommonError {
     fn from(value: FailureResponse) -> Self {
         Self::FailureResp(value)
     }
 }
 
-fn to_lines_string<T: AsRef<str>>(vec: &Vec<T>) -> String {
-    let mut ret = String::new();
-    for d in vec {
-        ret.push_str(d.as_ref());
-    }
-    ret
-}
+// fn to_lines_string<T: AsRef<str>>(vec: &Vec<T>) -> String {
+//     let mut ret = String::new();
+//     for d in vec {
+//         ret.push_str(d.as_ref());
+//     }
+//     ret
+// }
 
 impl std::fmt::Display for CommonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,6 +73,8 @@ impl std::fmt::Display for CommonError {
                 }
             }
             CommonError::IpcErr(ipc_err) => ipc_err.fmt(f),
+            CommonError::Utf8Err(utf8_err) => utf8_err.fmt(f),
+            CommonError::DeserializeErr(deser_err) => deser_err.fmt(f),
             // CommonError::RequestErr(e) => std::fmt::Debug::fmt(e, f),
             // CommonError::InvalidRequest(detail) => write!(f,"INVALID_REQUEST:{}", detail),
             // CommonError::ConnectionsExceedsLimit => write!(f, "CONNECTION_EXCEEDS_LIMIT"),

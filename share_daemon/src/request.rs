@@ -8,7 +8,7 @@ use std::{
 use tokio::net::tcp::OwnedReadHalf;
 
 use crate::{
-    consts::{self, request_head},
+    consts::{self, request},
     filedata::FileData,
     global,
     response::FailureResponse,
@@ -37,13 +37,13 @@ impl StartLine {
             if cmd_bytes.len() == 1 {
                 let args = parts.next().unwrap();
                 return match cmd_bytes[0] {
-                    request_head::HOST_REG => {
+                    request::HOST_REG => {
                         todo!()
                     }
-                    request_head::SHARE => {
+                    request::SHARE => {
                         todo!()
                     }
-                    request_head::TEST_REACHABLE => Ok(Self::TestReachable),
+                    request::TEST_REACHABLE => Ok(Self::TestReachable),
                     _ => invalid_ret,
                 };
             }
@@ -54,17 +54,17 @@ impl StartLine {
 
 impl std::fmt::Display for StartLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use consts::request_head;
+        use consts::request;
         match self {
-            StartLine::Share(hostname) => write!(f, "{} {}", request_head::SHARE, hostname),
+            StartLine::Share(hostname) => write!(f, "{} {}", request::SHARE, hostname),
             StartLine::HostRegister { hostname, ip } => {
-                write!(f, "{} {}:{}", request_head::HOST_REG, hostname, ip)
+                write!(f, "{} {}:{}", request::HOST_REG, hostname, ip)
             }
             StartLine::Receive {
                 file_name,
                 file_size,
-            } => write!(f, "{} {}:{}", request_head::RECV, file_name, file_size),
-            StartLine::PortPrepare(port) => write!(f, "{} {}", request_head::PORT_PREPARE, port),
+            } => write!(f, "{} {}:{}", request::RECV, file_name, file_size),
+            StartLine::PortPrepare(port) => write!(f, "{} {}", request::PORT_PREPARE, port),
             StartLine::TestReachable => write!(f, "?"),
         }
     }
@@ -154,17 +154,23 @@ impl Host {
         let config_store = server::config_store();
         match self {
             Host::Name(hostname) => config_store
-                .get_host_by_name(&hostname)
+                .get_ip_by_name(&hostname)
                 .map(|addr_r| addr_r.clone()),
-            Host::Addr(addr) => if config_store.check_ip_registered(*addr) {Some(*addr)} else {None},
+            Host::Addr(addr) => {
+                if config_store.check_ip_registered(*addr) {
+                    Some(*addr)
+                } else {
+                    None
+                }
+            }
         }
     }
 }
 
+
 #[derive(Debug)]
-pub enum Request {
-    Local(LocalRequest),
-    Remote(RemoteRequest),
+pub struct Request {
+    // action
 }
 
 #[derive(Debug)]

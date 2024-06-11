@@ -20,7 +20,7 @@ serde = { version = "*", features = ["derive"]}
 # crossbeam = "*"
 toml = "*"
 chrono = "*"
-tokio = { version = "*", features = ["rt", "rt-multi-thread", "net", "fs", "io-util"] }
+tokio = { version = "*", features = ["full"] }
 interprocess = {version = "*", features = ["tokio"]}
 ctrlc = "*"
 # sha2 = "*"
