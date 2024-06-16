@@ -1,165 +1,239 @@
-use std::{
-    ffi::OsStr,
-    net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
-};
+use std::{ffi::OsStr, path::PathBuf};
 
 use interprocess::local_socket::{
     traits::tokio::Listener, GenericNamespaced, ListenerOptions, NamespacedNameType,
 };
+use smol_str::{format_smolstr, SmolStr};
 use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{
-    config::{Config, ConfigStore},
-    global, handler, CommonResult,
+    config::Config,
+    consts, global, handler,
+    log::{LogLevel, Logger, LoggerKind},
+    CommonResult,
 };
-
-const NAME_IPC: &str = "tinyfileshare.localsock";
 
 fn join_set() -> &'static mut JoinSet<()> {
     static mut JOIN_SET: Option<JoinSet<()>> = None;
     unsafe { JOIN_SET.get_or_insert(JoinSet::new()) }
 }
 
-static mut CONFIG: Option<ConfigStore> = None;
+pub struct Server {
+    local_pipe_name: SmolStr,
+    logger_kind: LoggerKind,
+    log_dir: PathBuf,
+    log_level: LogLevel,
+    config: Config,
+}
 
-pub(crate) fn config_store() -> &'static mut ConfigStore {
-    unsafe {
-        match CONFIG.as_mut() {
-            Some(conf_store) => {
-                if let Err(e) = conf_store.try_update_config() {
-                    global::logger().error(format_args!("Update config in config_store failed! Detail: {}", e));
+impl Server {
+    pub fn default() -> Self {
+        Self {
+            local_pipe_name: SmolStr::new_inline(consts::NAME_IPC_LISTENER),
+            logger_kind: LoggerKind::ConsoleLogger,
+            log_level: LogLevel::Warn,
+            log_dir: global::default_log_dir().to_owned(),
+            config: Config::default(),
+        }
+    }
+    pub fn local_pipe_name(&mut self, name: &str) -> &mut Self {
+        self.local_pipe_name = SmolStr::new_inline(name);
+        self
+    }
+
+    pub fn listener_port(&mut self, port: u16) -> &mut Self {
+        self.config.set_listener_port(port);
+        self
+    }
+
+    pub fn log_level(&mut self, level: LogLevel) -> &mut Self {
+        self.log_level = level;
+        self
+    }
+
+    pub fn log_dir<P: Into<PathBuf>>(&mut self, log_dir: P) -> &mut Self {
+        self.log_dir = log_dir.into();
+        self
+    }
+
+    pub fn use_config_file<P: Into<std::path::PathBuf>>(
+        &mut self,
+        config_file_path: P,
+    ) -> CommonResult<&mut Self> {
+        global::set_config_path(config_file_path.into())?;
+        Ok(self)
+    }
+
+    pub fn num_workers(&mut self, n: u8) -> &mut Self {
+        self.config.set_num_workers(n);
+        self
+    }
+
+    pub fn use_console_logger(&mut self) -> &mut Self {
+        self.logger_kind = LoggerKind::ConsoleLogger;
+        self
+    }
+
+    pub fn use_file_logger(&mut self) -> &mut Self {
+        self.logger_kind = LoggerKind::FileLogger;
+        self
+    }
+
+    pub fn preset_receive_dir<P: Into<PathBuf>>(&mut self, receive_dir: P) -> &mut Self {
+        self.config.set_file_save_dir(receive_dir);
+        self
+    }
+
+    pub fn start(self) -> CommonResult<()> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_io()
+            .build()
+            .unwrap()
+            .block_on(self.start_inner())
+    }
+
+    async fn try_join() {
+        while join_set().len()
+            > global::config_store()
+                .await
+                .read()
+                .await
+                .inner()
+                .num_workers as usize
+        {
+            if let Some(Err(e)) = join_set().join_next().await {
+                global::logger()
+                    .error(format_smolstr!(
+                        "A local request handler task join failed: {}",
+                        e
+                    ))
+                    .await;
+            }
+        }
+    }
+
+    async fn start_local_daemon(pipe_name: SmolStr) {
+        let name_res = GenericNamespaced::map(OsStr::new(pipe_name.as_str()).into());
+        if let Ok(listen_name) = name_res {
+            let mut listener_res = ListenerOptions::new().name(listen_name).create_tokio();
+            if pipe_name != consts::NAME_IPC_LISTENER && listener_res.is_err() {
+                global::logger().warn(format_smolstr!("Create local listener failed, using specified pipe_name: {pipe_name}. Try to create it using default pipe name...")).await;
+                listener_res = ListenerOptions::new()
+                    .name(
+                        GenericNamespaced::map(OsStr::new(consts::NAME_IPC_LISTENER).into())
+                            .expect("Create GenericNamespace for local listener failed!"),
+                    )
+                    .create_tokio();
+            }
+            if let Ok(local_listener) = listener_res {
+                loop {
+                    let conn = match local_listener.accept().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            global::logger()
+                                .warn(format_smolstr!(
+                                    "There was an error with an incoming connection: {}",
+                                    e
+                                ))
+                                .await;
+                            continue;
+                        }
+                    };
+                    Self::try_join().await;
+                    join_set().spawn(async move {
+                        if let Err(e) = handler::handle_local(conn).await {
+                            global::logger()
+                                .error(format_smolstr!(
+                                    "Error occurred while handling a local process connection: {}",
+                                    e
+                                ))
+                                .await;
+                        }
+                    });
                 }
-                conf_store
-            }
-            None => {
-                CONFIG = Some(ConfigStore::from_config_path());
-                CONFIG.as_mut().unwrap()
-            }
-        }
-    }
-}
-
-async fn try_join() {
-    while join_set().len() > config_store().number_of_workers() as usize {
-        if let Some(Err(e)) = join_set().join_next().await {
-            global::logger().error(format_args!(
-                "A local request handler task join failed: {}",
-                e
-            ));
-        }
-    }
-}
-
-async fn start_local_daemon() {
-    let name_res = GenericNamespaced::map(OsStr::new(NAME_IPC).into());
-    if let Ok(listen_name) = name_res {
-        let listener_res = ListenerOptions::new().name(listen_name).create_tokio();
-        if let Ok(local_listener) = listener_res {
-            loop {
-                let conn = match local_listener.accept().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        global::logger().warn(format_args!(
-                            "There was an error with an incoming connection: {}",
-                            e
-                        ));
-                        continue;
-                    }
-                };
-                try_join().await;
-                join_set().spawn(async move {
-                    if let Err(e) = handler::handle_local(conn).await {
-                        global::logger().error(format_args!(
-                            "Error occurred while handling a local process connection: {}",
-                            e
-                        ));
-                    }
-                });
+            } else {
+                let err = listener_res.unwrap_err();
+                if err.kind() == tokio::io::ErrorKind::AddrInUse {
+                    global::logger().error(format_smolstr!("Error: could not start server because the socket file is occupied. Please check if {} is in use by another process and try again.", consts::NAME_IPC_LISTENER)).await;
+                } else {
+                    global::logger()
+                        .error(format_smolstr!(
+                            "Error occurred while create ipc listener: {}",
+                            err
+                        ))
+                        .await;
+                }
+                std::process::exit(1);
             }
         } else {
-            let err = listener_res.unwrap_err();
-            if err.kind() == tokio::io::ErrorKind::AddrInUse {
-                global::logger().error(format_args!("Error: could not start server because the socket file is occupied. Please check if {} is in use by another process and try again.", NAME_IPC));
-            } else {
-                global::logger().error(format_args!(
-                    "Error occurred while create ipc listener: {}",
-                    err
-                ));
-            }
+            global::logger()
+                .error(format_smolstr!(
+                    "Error occurred while create ipc socket name: {}",
+                    name_res.unwrap_err()
+                ))
+                .await;
             std::process::exit(1);
         }
-    } else {
-        global::logger().error(format_args!(
-            "Error occurred while create ipc socket name: {}",
-            name_res.unwrap_err()
-        ));
-        std::process::exit(1);
     }
-}
 
-async fn start_inner(ip_addr: IpAddr) -> CommonResult<()> {
-    let config = config_store();
-    let default_config = Config::default();
-    let listener;
-    let listen_res =
-        TcpListener::bind((ip_addr, config.start_port())).await;
-    if let Err(e) = listen_res {
-        if *config.inner_config() == default_config {
-            return Err(e.into());
+    async fn start_inner(mut self) -> CommonResult<()> {
+        unsafe {
+            global::GLOBAL_LOGGER = match self.logger_kind {
+                LoggerKind::FileLogger => Logger::file_logger(),
+                LoggerKind::ConsoleLogger => Logger::console_logger(),
+                LoggerKind::NoLogger => Logger::no_logger(),
+            };
         }
-        config.use_default();
-        listener = TcpListener::bind((ip_addr, config.start_port())).await?;
-    } else {
-        listener = listen_res.unwrap();
-    }
-    let local_addr = listener.local_addr().unwrap();
-    config.set_start_port(local_addr.port());
-    ctrlc::set_handler(|| {
-        println!("CtrlC Pressed, Exiting forced now!");
-        std::process::exit(0);
-    })
-    .expect("Set Ctrl+C event handler failed!");
-    tokio::spawn(start_local_daemon());
-    loop {
-        match listener.accept().await {
-            Ok((socket, addr)) => {
-                try_join().await;
-                join_set().spawn(async move {
-                    if let Err(e) = handler::handle_remote(socket, addr).await {
-                        global::logger().error(format_args!(
-                            "Error occurred while handling a remote connection: {}",
-                            e
-                        ));
-                    }
-                });
+        *global::log_dir() = self.log_dir;
+        let default_config = Config::default();
+        let listener;
+        let listen_res = TcpListener::bind(self.config.listener_addr).await;
+        if let Err(e) = listen_res {
+            if self.config.listener_addr == default_config.listener_addr {
+                return Err(e.into());
             }
-            Err(e) => {
-                global::logger().log(
-                    format_args!("Accept connection error: {}", e),
-                    crate::log::LogLevel::Error,
-                );
+            listener = TcpListener::bind(default_config.listener_addr).await?;
+        } else {
+            listener = listen_res.unwrap();
+        }
+        let local_addr = listener.local_addr().unwrap();
+        self.config.set_listener_addr(local_addr);
+        let conf_store_lock = global::config_store().await;
+        let mut config_store = conf_store_lock.write().await;
+        config_store.set_config(self.config);
+        config_store.save_to_file()?;
+        ctrlc::set_handler(|| {
+            println!("CtrlC Pressed, Exiting forced now!");
+            std::process::exit(0);
+        })
+        .expect("Set Ctrl+C event handler failed!");
+        tokio::spawn(Self::start_local_daemon(self.local_pipe_name));
+        loop {
+            match listener.accept().await {
+                Ok((socket, addr)) => {
+                    Self::try_join().await;
+                    join_set().spawn(async move {
+                        if let Err(e) = handler::handle_remote(socket, addr).await {
+                            global::logger()
+                                .error(format_smolstr!(
+                                    "Error occurred while handling a remote connection: {}",
+                                    e
+                                ))
+                                .await;
+                        }
+                    });
+                }
+                Err(e) => {
+                    global::logger()
+                        .log(
+                            format_smolstr!("Accept connection error: {}", e),
+                            crate::log::LogLevel::Error,
+                        )
+                        .await;
+                }
             }
         }
     }
-}
-
-pub async fn start_with_config_path<P: Into<PathBuf>>(config_path: P) -> CommonResult<()> {
-    global::set_config_path(config_path.into())?;
-    *config_store() = ConfigStore::from_config_path();
-    start_inner(IpAddr::V4(Ipv4Addr::UNSPECIFIED)).await?;
-    Ok(())
-}
-
-pub async fn start_default() -> CommonResult<()> {
-    start_inner(IpAddr::V4(Ipv4Addr::UNSPECIFIED)).await?;
-    Ok(())
-}
-
-pub async fn start_on(addr: std::net::SocketAddr) -> CommonResult<()> {
-    config_store().set_start_port(addr.port());
-    start_inner(addr.ip()).await?;
-    Ok(())
 }
 
 #[cfg(test)]

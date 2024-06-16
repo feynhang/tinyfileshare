@@ -1,16 +1,18 @@
 use std::str::Utf8Error;
 
-use crate::response::FailureResponse;
+use crate::consts;
+
 
 #[derive(Debug)]
 pub enum CommonError {
     IpcErr(IpcError),
+    FailureResponse(&'static str),
     IoErr(std::io::Error),
     ConfigPathErr(String),
-    FailureResp(FailureResponse),
     Utf8Err(Utf8Error),
     DeserializeErr(toml::de::Error),
     SimpleError(String),
+    Failed,
 }
 
 #[derive(Debug)]
@@ -43,13 +45,6 @@ impl From<Utf8Error> for CommonError {
 }
 
 
-
-impl From<FailureResponse> for CommonError {
-    fn from(value: FailureResponse) -> Self {
-        Self::FailureResp(value)
-    }
-}
-
 // fn to_lines_string<T: AsRef<str>>(vec: &Vec<T>) -> String {
 //     let mut ret = String::new();
 //     for d in vec {
@@ -63,8 +58,6 @@ impl std::fmt::Display for CommonError {
         match self {
             CommonError::IoErr(io_err) => io_err.fmt(f),
             CommonError::SimpleError(e) => e.fmt(f),
-            // CommonError::InvalidPaths(e) => write!(f, "SOME_PATHS_INVALID:\n{}", to_lines_string(e)),
-            CommonError::FailureResp(reply_err) => std::fmt::Debug::fmt(reply_err, f),
             CommonError::ConfigPathErr(extra_msg) => {
                 if extra_msg.trim().is_empty() {
                     write!(f, "Path Error")
@@ -75,6 +68,8 @@ impl std::fmt::Display for CommonError {
             CommonError::IpcErr(ipc_err) => ipc_err.fmt(f),
             CommonError::Utf8Err(utf8_err) => utf8_err.fmt(f),
             CommonError::DeserializeErr(deser_err) => deser_err.fmt(f),
+            CommonError::FailureResponse(resp_str) => write!(f, "{}{}", resp_str, consts::LINE_SEP),
+            CommonError::Failed => write!(f, "ActionFailed"),
             // CommonError::RequestErr(e) => std::fmt::Debug::fmt(e, f),
             // CommonError::InvalidRequest(detail) => write!(f,"INVALID_REQUEST:{}", detail),
             // CommonError::ConnectionsExceedsLimit => write!(f, "CONNECTION_EXCEEDS_LIMIT"),

@@ -10,6 +10,7 @@ mod client;
 pub const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
 fn main() {
+    
     let args: Vec<String> = std::env::args().collect();
     match args.len() {
         0 => panic!("Invalid state, std::env::args() should not be empty!"),

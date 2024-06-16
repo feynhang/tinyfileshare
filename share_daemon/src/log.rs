@@ -1,12 +1,10 @@
-use std::{
-    fs::File,
-    io::Write,
-    path::PathBuf,
-    sync::RwLock,
-};
+use std::{fs::File, io::Write};
 
+use chrono::NaiveDate;
+use crossbeam_utils::atomic::AtomicCell;
+use tokio::sync::RwLock;
 
-use crate::{global, server};
+use crate::global;
 
 #[derive(Debug)]
 pub struct Logger {
@@ -17,6 +15,7 @@ pub struct Logger {
 pub enum LoggerKind {
     FileLogger,
     ConsoleLogger,
+    NoLogger,
 }
 
 #[allow(unused)]
@@ -30,6 +29,8 @@ pub enum LogLevel {
     Error,
     Off,
 }
+
+unsafe impl Send for LogLevel {}
 
 impl std::fmt::Display for LogLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,66 +48,97 @@ impl std::fmt::Display for LogLevel {
 
 #[allow(unused)]
 impl Logger {
-    pub(crate) fn console_logger() -> Self {
+    pub(crate) const fn no_logger() -> Self {
         Self {
-            level: Default::default(),
+            level: LogLevel::Off,
+            kind: LoggerKind::NoLogger,
+        }
+    }
+    pub(crate) const fn console_logger() -> Self {
+        Self {
+            level: LogLevel::Info,
             kind: LoggerKind::ConsoleLogger,
         }
     }
 
-    pub(crate) fn file_logger() -> Self {
+    pub(crate) const fn file_logger() -> Self {
         Self {
-            level: Default::default(),
+            level: LogLevel::Info,
             kind: LoggerKind::FileLogger,
         }
     }
 
-    fn get_log_file_path() -> PathBuf {
-        let mut log_file_path = server::config_store().log_dir().to_path_buf();
-        log_file_path.push(format!("{}.log", chrono::Local::now().date_naive()));
-        log_file_path
+    fn date() -> &'static AtomicCell<NaiveDate> {
+        static TODAY: AtomicCell<NaiveDate> = AtomicCell::new(NaiveDate::MIN);
+        if TODAY.load() == NaiveDate::MIN {
+            TODAY.store(chrono::Local::now().date_naive());
+        }
+        &TODAY
     }
 
-    pub(crate) fn log<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T, level: LogLevel) {
-        if level < self.level {
+    fn update_date() -> bool {
+        let new_day = chrono::Local::now().date_naive();
+        unsafe {
+            if Self::date().load() != new_day {
+                Self::date().store(new_day);
+                return true;
+            }
+            false
+        }
+    }
+
+    async fn open_log_file() -> File {
+        let mut log_file_path = global::log_dir().to_owned();
+        log_file_path.push(format!("{}.log", Self::date().load()));
+        let mut open_options = File::options();
+        if log_file_path.is_file() {
+            open_options.append(true);
+        } else {
+            open_options.write(true).create(true);
+        }
+        match open_options.open(log_file_path) {
+            Ok(f) => f,
+            Err(e) => panic!(
+                "Error occurred while open or create log file! Detail: {}",
+                e
+            ),
+        }
+    }
+
+    pub(crate) async fn log<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
+        &self,
+        msg: T,
+        level: LogLevel,
+    ) {
+        if matches!(self.kind, LoggerKind::NoLogger) || level < self.level {
             return;
         }
-        match &mut self.kind {
+        match &self.kind {
             LoggerKind::FileLogger => {
                 static mut LOG_FILE: Option<RwLock<File>> = None;
-                let log_file_path = Self::get_log_file_path();
-                let log_file = unsafe {
-                    if log_file_path.is_file() {
-                        LOG_FILE.get_or_insert(RwLock::new(
-                            File::options()
-                                .append(true)
-                                .open(log_file_path)
-                                .expect("Unexpected: open log file failed!"),
-                        ))
-                    } else {
-                        LOG_FILE = Some(RwLock::new(
-                            File::options()
-                                .write(true)
-                                .create(true)
-                                .open(log_file_path)
-                                .expect("Unexpected: create log file failed!"),
-                        ));
-                        LOG_FILE.as_mut().unwrap()
+                let mut f_guard = unsafe {
+                    if Self::update_date() {
+                        LOG_FILE = Some(RwLock::new(Self::open_log_file().await));
+                    }
+                    match LOG_FILE.as_ref() {
+                        Some(f_lock) => f_lock.write().await,
+                        None => {
+                            LOG_FILE = Some(RwLock::new(Self::open_log_file().await));
+                            LOG_FILE.as_ref().unwrap().write().await
+                        }
                     }
                 };
-                let mut writer = log_file.write().expect("Get log file write lock failed!");
-                writer
+                f_guard
                     .write_fmt(format_args!(
                         "[{}]-[{}]: {}",
                         level,
                         chrono::Local::now().time(),
                         msg
                     ))
-                    .unwrap();
-                writer.flush().unwrap();
+                    .expect("Write a log message to log file failed!");
             }
             LoggerKind::ConsoleLogger => {
-                let mut stdout = std::io::stdout();
+                let mut stdout = std::io::stdout().lock();
                 stdout
                     .write_fmt(format_args!(
                         "[{}]-[{}]: {}",
@@ -114,26 +146,30 @@ impl Logger {
                         chrono::Local::now().time(),
                         msg
                     ))
-                    .expect("This should not happen: write an log to sync stdout failed!");
+                    .expect("This should not happen: write an log to StdoutLock failed!");
                 stdout.flush().unwrap();
             }
+            LoggerKind::NoLogger => return,
         }
     }
 
-    pub(crate) fn warn<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T) {
-        self.log(msg, LogLevel::Warn)
+    pub(crate) async fn warn<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Warn).await
     }
 
-    pub(crate) fn info<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T) {
-        self.log(msg, LogLevel::Info)
+    pub(crate) async fn info<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Info).await
     }
-    pub(crate) fn error<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T) {
-        self.log(msg, LogLevel::Error)
+    pub(crate) async fn error<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Error).await
     }
-    pub(crate) fn debug<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T) {
-        self.log(msg, LogLevel::Debug)
+    pub(crate) async fn debug<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Debug).await
     }
-    pub(crate) fn verbose<T: std::fmt::Display + std::fmt::Debug>(&mut self, msg: T) {
-        self.log(msg, LogLevel::Verbose)
+    pub(crate) async fn verbose<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
+        &self,
+        msg: T,
+    ) {
+        self.log(msg, LogLevel::Verbose).await
     }
 }

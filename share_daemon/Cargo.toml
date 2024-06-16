@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # uuid = {version = "*", features = ["v4", "fast-rng"] }
 serde = { version = "*", features = ["derive"]}
-# crossbeam = "*"
+crossbeam-utils = "*"
 toml = "*"
 chrono = "*"
 tokio = { version = "*", features = ["full"] }
@@ -25,8 +25,9 @@ interprocess = {version = "*", features = ["tokio"]}
 ctrlc = "*"
 # sha2 = "*"
 # hex = "*"
-# constcat = "*"
-const_format = "*"
+constcat = "*"
+smol_str = "*"
+# const_format = "*"
 # tinystr = "*"
 
 # [target.x86_64-pc-windows-msvc.dependencies]
