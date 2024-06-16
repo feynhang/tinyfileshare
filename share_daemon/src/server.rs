@@ -24,6 +24,7 @@ pub struct Server {
     log_dir: PathBuf,
     log_level: LogLevel,
     config: Config,
+    use_config_file: bool,
 }
 
 impl Server {
@@ -34,6 +35,7 @@ impl Server {
             log_level: LogLevel::Warn,
             log_dir: global::default_log_dir().to_owned(),
             config: Config::default(),
+            use_config_file: false,
         }
     }
     pub fn local_pipe_name(&mut self, name: &str) -> &mut Self {
@@ -61,6 +63,7 @@ impl Server {
         config_file_path: P,
     ) -> CommonResult<&mut Self> {
         global::set_config_path(config_file_path.into())?;
+        self.use_config_file = true;
         Ok(self)
     }
 
@@ -185,6 +188,9 @@ impl Server {
             };
         }
         *global::log_dir() = self.log_dir;
+        if self.use_config_file {
+            self.config = global::config_store().await.read().await.inner().clone();
+        }
         let default_config = Config::default();
         let listener;
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
@@ -201,7 +207,7 @@ impl Server {
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
         config_store.set_config(self.config);
-        config_store.save_to_file()?;
+        config_store.save_to_file().await?;
         ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);

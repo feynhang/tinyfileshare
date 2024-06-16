@@ -167,7 +167,7 @@ async fn try_register_to_local(hostname: &str, ip: IpAddr) -> CommonResult<Optio
     let conf_store_lock = global::config_store().await;
     let mut config_store = conf_store_lock.write().await;
     let replaced = config_store.mut_inner().register_host(hostname, ip);
-    config_store.save_to_file()?;
+    config_store.save_to_file().await?;
     Ok(replaced)
 }
 

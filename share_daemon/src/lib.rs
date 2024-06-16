@@ -106,26 +106,29 @@ mod global {
 
     pub(crate) fn log_dir() -> &'static mut PathBuf {
         static mut LOG_DIR: Option<PathBuf> = None;
-        unsafe {LOG_DIR.get_or_insert(default_log_dir().to_owned())}
+        unsafe { LOG_DIR.get_or_insert(default_log_dir().to_owned()) }
     }
-    
+
     // pub(crate) fn fallback_to_default_config_store()
 
-    pub(crate) async fn config_store() -> Arc< RwLock<ConfigStore>> {
-        static mut CONFIG: Option<Arc<RwLock<ConfigStore>>> = None;
+    pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
+        static mut CONFIG: Option<RwLock<ConfigStore>> = None;
         unsafe {
             match CONFIG.as_mut() {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
-                    if let Err(e) = config_store.try_update_config() {
-                        logger().error(smol_str::format_smolstr!(
-                            "Update config in config_store failed! Detail: {}",
-                            e
-                        )).await;
+                    if let Err(e) = config_store.try_update_config().await {
+                        logger()
+                            .error(smol_str::format_smolstr!(
+                                "Update config in config_store failed! Detail: {}",
+                                e
+                            ))
+                            .await;
                     }
-                    conf_store_lock.clone()
+                    conf_store_lock
                 }
-                None => CONFIG.get_or_insert(Arc::new(RwLock::new(ConfigStore::from_config_file()))).clone(),
+                None => CONFIG
+                    .get_or_insert(RwLock::new(ConfigStore::from_config_file().await)),
             }
         }
     }
@@ -223,7 +226,6 @@ mod tests {
     use std::hash::Hasher;
     use std::io::BufRead;
     use std::io::Cursor;
-    use std::ops::Add;
     use std::ops::AddAssign;
     use std::sync::atomic::AtomicI64;
 

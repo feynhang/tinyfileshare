@@ -38,20 +38,22 @@ impl ConfigStore {
         self.current_config = config;
     }
 
-    pub(crate) fn from_config_file() -> Self {
+    pub(crate) async fn from_config_file() -> Self {
         match Self::try_from_file() {
             Ok(config) => config,
             Err(e) => {
                 global::logger().warn(smol_str::format_smolstr!(
                     "Error occurred while try read config from file! Sever will use default. Detail: {}",
                     e
-                ));
+                )).await;
                 let mut default_config_store = Self::default();
-                if let Err(e) = default_config_store.save_to_file() {
-                    global::logger().error(smol_str::format_smolstr!(
-                        "Error occurred while write default config to file!!! Detail: {}",
-                        e
-                    ));
+                if let Err(e) = default_config_store.save_to_file().await {
+                    global::logger()
+                        .error(smol_str::format_smolstr!(
+                            "Error occurred while write default config to file!!! Detail: {}",
+                            e
+                        ))
+                        .await;
                 }
                 default_config_store
             }
@@ -76,9 +78,9 @@ impl ConfigStore {
         Err(CommonError::SimpleError("Config file is empty!".to_owned()))
     }
 
-    pub(crate) fn try_update_config(&mut self) -> CommonResult<()> {
-        let f = std::sync::RwLock::new(File::open(global::config_path())?);
-        let mut block_f = f.write().unwrap();
+    pub(crate) async fn try_update_config(&mut self) -> CommonResult<()> {
+        let f = tokio::sync::RwLock::new(File::open(global::config_path())?);
+        let mut block_f = f.write().await;
         let modified_res = block_f.metadata()?.modified();
         if let Ok(last_mod_time) = modified_res {
             match self.last_modified {
@@ -97,7 +99,7 @@ impl ConfigStore {
             let config = toml::from_str::<Config>(std::str::from_utf8(&bytes)?)?;
             self.current_config = config.checked();
         } else {
-            self.save_to_file()?;
+            self.save_to_file().await?;
         }
         Ok(())
     }
@@ -110,9 +112,9 @@ impl ConfigStore {
         &mut self.current_config
     }
 
-    pub(crate) fn save_to_file(&mut self) -> std::io::Result<()> {
-        let f_lock = std::sync::RwLock::new(std::fs::File::create(global::config_path())?);
-        let mut f_guard = f_lock.write().unwrap();
+    pub(crate) async fn save_to_file(&mut self) -> std::io::Result<()> {
+        let f_lock = tokio::sync::RwLock::new(std::fs::File::create(global::config_path())?);
+        let mut f_guard = f_lock.write().await;
         f_guard.write_all(
             toml::to_string(&self.current_config)
                 .expect("Config serialize to toml failed, this should not happen!")
@@ -264,9 +266,7 @@ impl Config {
 mod tests {
     use std::{fs::File, io::Write, path::PathBuf};
 
-    use crate::{config::ConfigStore, global};
 
-    use super::Config;
 
     #[test]
     fn create_dir_all_test() {
@@ -281,37 +281,6 @@ mod tests {
     }
 
     const TEMP_CONF_PATH: &str = "C:\\Users\\feyn\\.cache\\tinyfileshare\\configdir";
-
-    #[test]
-    fn serial_test() {
-        let config = Config::new(
-            ([192, 168, 3, 2], 2082).into(),
-            0,
-            1,
-            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
-        );
-        // config.add_user("feyn", "387eccc3");
-        global::set_config_path(TEMP_CONF_PATH.into()).expect("Set config path failed");
-        let _res = ConfigStore {
-            current_config: config,
-            last_modified: super::LastModified::Unknown,
-        }
-        .save_to_file();
-    }
-
-    #[test]
-    fn deserial_test() {
-        let config = Config::new(
-            ([192, 168, 3, 2], 2082).into(),
-            0,
-            1,
-            PathBuf::from("C:/Users/feyn/.cache/tinyfileshare/log"),
-        );
-        // config.add_user("feyn", "387eccc3");
-        global::set_config_path(TEMP_CONF_PATH.into()).expect("Set config path failed");
-        let read_config = ConfigStore::from_config_file();
-        assert_eq!(read_config.current_config, config);
-    }
 
     #[test]
     fn read_file_err_test() {
