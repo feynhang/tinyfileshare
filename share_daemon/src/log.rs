@@ -1,8 +1,7 @@
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, sync::RwLock};
 
 use chrono::NaiveDate;
 use crossbeam_utils::atomic::AtomicCell;
-use tokio::sync::RwLock;
 
 use crate::global;
 
@@ -87,7 +86,7 @@ impl Logger {
         }
     }
 
-    async fn open_log_file() -> File {
+    fn open_log_file() -> File {
         let mut log_file_path = global::log_dir().to_owned();
         log_file_path.push(format!("{}.log", Self::date().load()));
         let mut open_options = File::options();
@@ -105,7 +104,7 @@ impl Logger {
         }
     }
 
-    pub(crate) async fn log<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
+    pub(crate) fn log<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
         &self,
         msg: T,
         level: LogLevel,
@@ -118,13 +117,13 @@ impl Logger {
                 static mut LOG_FILE: Option<RwLock<File>> = None;
                 let mut f_guard = unsafe {
                     if Self::update_date() {
-                        LOG_FILE = Some(RwLock::new(Self::open_log_file().await));
+                        LOG_FILE = Some(RwLock::new(Self::open_log_file()));
                     }
                     match LOG_FILE.as_ref() {
-                        Some(f_lock) => f_lock.write().await,
+                        Some(f_lock) => f_lock.write().unwrap(),
                         None => {
-                            LOG_FILE = Some(RwLock::new(Self::open_log_file().await));
-                            LOG_FILE.as_ref().unwrap().write().await
+                            LOG_FILE = Some(RwLock::new(Self::open_log_file()));
+                            LOG_FILE.as_ref().unwrap().write().unwrap()
                         }
                     }
                 };
@@ -153,23 +152,23 @@ impl Logger {
         }
     }
 
-    pub(crate) async fn warn<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
-        self.log(msg, LogLevel::Warn).await
+    pub(crate) fn warn<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Warn)
     }
 
-    pub(crate) async fn info<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
-        self.log(msg, LogLevel::Info).await
+    pub(crate) fn info<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Info)
     }
-    pub(crate) async fn error<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
-        self.log(msg, LogLevel::Error).await
+    pub(crate) fn error<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Error)
     }
-    pub(crate) async fn debug<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
-        self.log(msg, LogLevel::Debug).await
+    pub(crate) fn debug<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(&self, msg: T) {
+        self.log(msg, LogLevel::Debug)
     }
-    pub(crate) async fn verbose<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
+    pub(crate) fn verbose<T: std::fmt::Display + std::fmt::Debug + Send + Sync>(
         &self,
         msg: T,
     ) {
-        self.log(msg, LogLevel::Verbose).await
+        self.log(msg, LogLevel::Verbose)
     }
 }

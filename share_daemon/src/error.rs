@@ -1,5 +1,7 @@
 use std::str::Utf8Error;
 
+use smol_str::SmolStr;
+
 use crate::consts;
 
 
@@ -8,11 +10,11 @@ pub enum CommonError {
     IpcErr(IpcError),
     FailureResponse(&'static str),
     IoErr(std::io::Error),
-    ConfigPathErr(String),
+    ConfigPathErr(SmolStr),
     Utf8Err(Utf8Error),
     DeserializeErr(toml::de::Error),
-    SimpleError(String),
-    Failed,
+    SimpleError(SmolStr),
+    // Failed,
 }
 
 #[derive(Debug)]
@@ -69,7 +71,7 @@ impl std::fmt::Display for CommonError {
             CommonError::Utf8Err(utf8_err) => utf8_err.fmt(f),
             CommonError::DeserializeErr(deser_err) => deser_err.fmt(f),
             CommonError::FailureResponse(resp_str) => write!(f, "{}{}", resp_str, consts::LINE_SEP),
-            CommonError::Failed => write!(f, "ActionFailed"),
+            // CommonError::Failed => write!(f, "ActionFailed"),
             // CommonError::RequestErr(e) => std::fmt::Debug::fmt(e, f),
             // CommonError::InvalidRequest(detail) => write!(f,"INVALID_REQUEST:{}", detail),
             // CommonError::ConnectionsExceedsLimit => write!(f, "CONNECTION_EXCEEDS_LIMIT"),

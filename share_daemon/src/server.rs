@@ -1,9 +1,9 @@
-use std::{ffi::OsStr, path::PathBuf};
+use std::{ffi::OsStr, net::SocketAddr, path::PathBuf};
 
 use interprocess::local_socket::{
-    traits::tokio::Listener, GenericNamespaced, ListenerOptions, NamespacedNameType,
+    traits::tokio::Listener, GenericNamespaced, ListenerOptions, NamespacedNameType, ToNsName,
 };
-use smol_str::{format_smolstr, SmolStr};
+use smol_str::{format_smolstr, SmolStr, ToSmolStr};
 use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{
@@ -19,7 +19,8 @@ fn join_set() -> &'static mut JoinSet<()> {
 }
 
 pub struct Server {
-    local_pipe_name: SmolStr,
+    server_ipc_sock_name: SmolStr,
+    client_ipc_sock_name: SmolStr,
     logger_kind: LoggerKind,
     log_dir: PathBuf,
     log_level: LogLevel,
@@ -30,7 +31,8 @@ pub struct Server {
 impl Server {
     pub fn default() -> Self {
         Self {
-            local_pipe_name: SmolStr::new_inline(consts::NAME_IPC_LISTENER),
+            server_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCKET_NAME),
+            client_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCKET_NAME),
             logger_kind: LoggerKind::ConsoleLogger,
             log_level: LogLevel::Warn,
             log_dir: global::default_log_dir().to_owned(),
@@ -38,8 +40,20 @@ impl Server {
             use_config_file: false,
         }
     }
-    pub fn local_pipe_name(&mut self, name: &str) -> &mut Self {
-        self.local_pipe_name = SmolStr::new_inline(name);
+    pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
+        self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
+        self
+    }
+
+    fn checked_ipc_socket_name(name: &str) -> SmolStr {
+        if name.to_ns_name::<GenericNamespaced>().is_ok() {
+            return name.to_smolstr();
+        }
+        consts::DEFAULT_CLIENT_IPC_SOCKET_NAME.to_smolstr()
+    }
+
+    pub fn client_ipc_socket_name(&mut self, client_ipc_sock_name: &str) -> &mut Self {
+        self.client_ipc_sock_name = Self::checked_ipc_socket_name(client_ipc_sock_name);
         self
     }
 
@@ -83,7 +97,12 @@ impl Server {
     }
 
     pub fn preset_receive_dir<P: Into<PathBuf>>(&mut self, receive_dir: P) -> &mut Self {
-        self.config.set_file_save_dir(receive_dir);
+        self.config.set_receive_dir(receive_dir);
+        self
+    }
+
+    pub fn add_reg_host(&mut self, hostname: &str, host: SocketAddr) -> &mut Self {
+        self.config.register_host(hostname, host);
         self
     }
 
@@ -96,85 +115,65 @@ impl Server {
     }
 
     async fn try_join() {
-        while join_set().len()
-            > global::config_store()
-                .await
-                .read()
-                .await
-                .inner()
-                .num_workers as usize
-        {
+        while join_set().len() > global::config_store().await.read().await.num_workers() as usize {
             if let Some(Err(e)) = join_set().join_next().await {
-                global::logger()
-                    .error(format_smolstr!(
-                        "A local request handler task join failed: {}",
-                        e
-                    ))
-                    .await;
+                global::logger().error(format_smolstr!(
+                    "A local request handler task join failed: {}",
+                    e
+                ));
             }
         }
     }
 
-    async fn start_local_daemon(pipe_name: SmolStr) {
-        let name_res = GenericNamespaced::map(OsStr::new(pipe_name.as_str()).into());
-        if let Ok(listen_name) = name_res {
-            let mut listener_res = ListenerOptions::new().name(listen_name).create_tokio();
-            if pipe_name != consts::NAME_IPC_LISTENER && listener_res.is_err() {
-                global::logger().warn(format_smolstr!("Create local listener failed, using specified pipe_name: {pipe_name}. Try to create it using default pipe name...")).await;
-                listener_res = ListenerOptions::new()
-                    .name(
-                        GenericNamespaced::map(OsStr::new(consts::NAME_IPC_LISTENER).into())
-                            .expect("Create GenericNamespace for local listener failed!"),
-                    )
-                    .create_tokio();
-            }
-            if let Ok(local_listener) = listener_res {
-                loop {
-                    let conn = match local_listener.accept().await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            global::logger()
-                                .warn(format_smolstr!(
-                                    "There was an error with an incoming connection: {}",
-                                    e
-                                ))
-                                .await;
-                            continue;
-                        }
-                    };
-                    Self::try_join().await;
-                    join_set().spawn(async move {
-                        if let Err(e) = handler::handle_local(conn).await {
-                            global::logger()
-                                .error(format_smolstr!(
-                                    "Error occurred while handling a local process connection: {}",
-                                    e
-                                ))
-                                .await;
-                        }
-                    });
-                }
-            } else {
-                let err = listener_res.unwrap_err();
-                if err.kind() == tokio::io::ErrorKind::AddrInUse {
-                    global::logger().error(format_smolstr!("Error: could not start server because the socket file is occupied. Please check if {} is in use by another process and try again.", consts::NAME_IPC_LISTENER)).await;
-                } else {
-                    global::logger()
-                        .error(format_smolstr!(
-                            "Error occurred while create ipc listener: {}",
-                            err
-                        ))
-                        .await;
-                }
-                std::process::exit(1);
+    fn try_create_default_ipc_server(
+    ) -> std::io::Result<interprocess::local_socket::tokio::Listener> {
+        let ipc_name = consts::DEFAULT_SERVER_IPC_SOCKET_NAME
+            .to_ns_name::<GenericNamespaced>()
+            .unwrap();
+        global::set_server_ipc_socket_name(consts::DEFAULT_SERVER_IPC_SOCKET_NAME.to_smolstr());
+        ListenerOptions::new().name(ipc_name).create_tokio()
+    }
+
+    async fn start_local_listener() {
+        let name_str = global::server_ipc_socket_name();
+        let ipc_sock_name = GenericNamespaced::map(OsStr::new(name_str).into()).unwrap();
+        let mut listener_res = ListenerOptions::new().name(ipc_sock_name).create_tokio();
+        if listener_res.is_err() && name_str != consts::DEFAULT_SERVER_IPC_SOCKET_NAME {
+            global::logger().warn(format_smolstr!("Create local listener failed by using specified IPC socket name: {name_str}. Try to create it using default name..."));
+            listener_res = Self::try_create_default_ipc_server();
+        }
+        if let Ok(local_listener) = listener_res {
+            loop {
+                let conn = match local_listener.accept().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        global::logger().warn(format_smolstr!(
+                            "There was an error with an incoming connection: {}",
+                            e
+                        ));
+                        continue;
+                    }
+                };
+                Self::try_join().await;
+                join_set().spawn(async move {
+                    if let Err(e) = handler::handle_local(conn).await {
+                        global::logger().error(format_smolstr!(
+                            "Error occurred while handling a local process connection: {}",
+                            e
+                        ));
+                    }
+                });
             }
         } else {
-            global::logger()
-                .error(format_smolstr!(
-                    "Error occurred while create ipc socket name: {}",
-                    name_res.unwrap_err()
-                ))
-                .await;
+            let err = listener_res.unwrap_err();
+            if err.kind() == tokio::io::ErrorKind::AddrInUse {
+                global::logger().error(format_smolstr!("Error: could not start server because the socket file is occupied. Please check if {} is in use by another process and try again.", consts::DEFAULT_SERVER_IPC_SOCKET_NAME));
+            } else {
+                global::logger().error(format_smolstr!(
+                    "Error occurred while create ipc listener: {}",
+                    err
+                ));
+            }
             std::process::exit(1);
         }
     }
@@ -187,55 +186,53 @@ impl Server {
                 LoggerKind::NoLogger => Logger::no_logger(),
             };
         }
-        *global::log_dir() = self.log_dir;
+        global::set_log_dir(self.log_dir);
         if self.use_config_file {
-            self.config = global::config_store().await.read().await.inner().clone();
+            self.config = global::config_store().await.read().await.clone_inner();
         }
-        let default_config = Config::default();
-        let listener;
+
+        let remote_listener;
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
         if let Err(e) = listen_res {
-            if self.config.listener_addr == default_config.listener_addr {
+            if self.config.listener_addr == consts::DEFAULT_LISTENER_ADDR {
                 return Err(e.into());
             }
-            listener = TcpListener::bind(default_config.listener_addr).await?;
+            remote_listener = TcpListener::bind(consts::DEFAULT_LISTENER_ADDR).await?;
         } else {
-            listener = listen_res.unwrap();
+            remote_listener = listen_res.unwrap();
         }
-        let local_addr = listener.local_addr().unwrap();
+        let local_addr = remote_listener.local_addr().unwrap();
         self.config.set_listener_addr(local_addr);
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
         config_store.set_config(self.config);
-        config_store.save_to_file().await?;
+        config_store.save_to_file()?;
         ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);
         })
         .expect("Set Ctrl+C event handler failed!");
-        tokio::spawn(Self::start_local_daemon(self.local_pipe_name));
+        global::set_server_ipc_socket_name(self.server_ipc_sock_name);
+        global::set_client_ipc_socket_name(self.client_ipc_sock_name);
+        tokio::spawn(Self::start_local_listener());
         loop {
-            match listener.accept().await {
+            match remote_listener.accept().await {
                 Ok((socket, addr)) => {
                     Self::try_join().await;
                     join_set().spawn(async move {
                         if let Err(e) = handler::handle_remote(socket, addr).await {
-                            global::logger()
-                                .error(format_smolstr!(
-                                    "Error occurred while handling a remote connection: {}",
-                                    e
-                                ))
-                                .await;
+                            global::logger().error(format_smolstr!(
+                                "Error occurred while handling a remote connection: {}",
+                                e
+                            ));
                         }
                     });
                 }
                 Err(e) => {
-                    global::logger()
-                        .log(
-                            format_smolstr!("Accept connection error: {}", e),
-                            crate::log::LogLevel::Error,
-                        )
-                        .await;
+                    global::logger().log(
+                        format_smolstr!("Accept connection error: {}", e),
+                        crate::log::LogLevel::Error,
+                    );
                 }
             }
         }
@@ -243,47 +240,4 @@ impl Server {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{mem::transmute, path::PathBuf};
-
-    use crate::global;
-
-    #[test]
-    fn ptr_test() {
-        let v: u16 = 8905;
-        let p_v: *const u16 = &v;
-        unsafe {
-            let p_u8 = transmute::<*const u16, *const u8>(p_v);
-
-            let part1 = *p_u8;
-            let part2 = *p_u8.add(1);
-
-            println!("rep_v1 = {}", part1);
-            println!("rep_v2 = {}", part2);
-
-            let bytes = [part1, part2];
-            let p_bytes = bytes.as_ptr();
-            let p_raw_v = transmute::<*const u8, *const u16>(p_bytes);
-
-            assert_eq!(v, *p_raw_v);
-        }
-    }
-
-    #[test]
-    fn to_ne_bytes_test() {
-        let v = 8905_u16;
-        let bytes = v.to_ne_bytes();
-        println!("{}\n{}", bytes[0], bytes[1]);
-        assert_eq!(v, u16::from_ne_bytes(bytes));
-    }
-
-    #[test]
-    fn create_dir_all_test() {
-        let mut home_path = PathBuf::from(global::home_path());
-        home_path.push(".test");
-        home_path.push("innerdir1");
-        home_path.push("inner_dir2");
-        let res = std::fs::create_dir_all(home_path);
-        assert!(res.is_ok());
-    }
-}
+mod tests {}

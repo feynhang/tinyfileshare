@@ -14,16 +14,27 @@ pub type CommonResult<T> = Result<T, CommonError>;
 // pub type CommonResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub mod consts {
-    use std::time::Duration;
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        time::Duration,
+    };
 
     pub const KB: usize = 1024;
     pub const MB: usize = usize::pow(KB, 2);
     pub const GB: usize = usize::pow(MB, 2);
-    pub const MAX_FILE_SIZE_PER_TRANS: usize = 10 * MB;
+    pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
+    pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
 
-    pub const NAME_IPC_CLIENT: &str = "share_client.sock";
-    pub const NAME_IPC_LISTENER: &str = "share_server.sock";
+    pub const FILE_NAME_LENGTH_LIMIT: usize = 260;
+    // pub 
 
+    pub const DEFAULT_CLIENT_IPC_SOCKET_NAME: &str = "share-client.sock";
+    pub const DEFAULT_SERVER_IPC_SOCKET_NAME: &str = "share-server.sock";
+    pub const UNSPECIFIED_PORT: u16 = 0;
+    pub const PORT_TEST_BOUND: u16 = 1000;
+    
+    pub const DEFAULT_LISTENER_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT);
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
     pub const LINE_SEP: &str = "\r\n";
@@ -38,19 +49,32 @@ pub mod consts {
 
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-    pub mod request {
+    pub mod trans_flag {
         pub const TRANSFER_START: &str = "TRANSFER_START";
+        pub const TRANSFER_END: &str = "TRANSFER_END";
+    }
+    
+    pub mod request {
         pub const SHARE: &str = "SHARE";
         pub const HOST_REG: &str = "REG";
-        pub const PORT_PREPARE: &str = "PORT";
+        pub const PORT_EXPECTED: &str = "PORT";
         pub const REG_ME: &str = "REG_ME";
+        pub const REG_FROM: &str = "REG_FROM";
+        pub const FILES_RECV: &str = "FILES_RECV";
+
     }
     pub mod reply {
-
-        pub const TRANSFER_END: &str = "TRANSFER_END";
+        pub const ACCEPT: &str = "ACCEPT";
+        pub const REJECT: &str = "REJECT";
+        pub const INVALID_RECV_DIR: &str = "INVALID_RECV_DIR";
+        
+        
+        /// which means the remote host can not accept a request
+        pub const REMOTE_STREAM_UNWRITABLE: &str = "REMOTE_STREAM_UNWRITABLE";
+        pub const REMOTE_UNRESPONSIVE: &str = "REMOTE_UNRESPONSIVE";
         pub const UNEXPECTED_REMOTE_RESPONSE: &str = "UNEXPECTED_REMOTE_RESPONSE";
         pub const UNEXPECTED_RESPONSE: &str = "UNEXPECTED_RESPONSE";
-        pub const UNREACHABLE_SOCKETADDRESS: &str = "UNREACHABLE_IP";
+        pub const UNREACHABLE_ADDRESS: &str = "UNREACHABLE_ADDRESS";
         pub const PROGRESS: &str = "PROGRESS";
         pub const REPLACED_IP: &str = "REPLACED";
         pub const RECV_FINISHED: &str = "RECV_FINISHED";
@@ -58,38 +82,53 @@ pub mod consts {
         pub const CONNECTIONS_OVERLOAD: &str = "CONNECTION_OVERLOAD";
         pub const LISTENER_STARTED: &str = "LISTENER_STARTED";
         pub const PORT_CONFIRM: &str = "PORT_CONFIRM";
-        pub const PORT_OK: &str = "PORT_OK";
         pub const ALL_PATHS_INVALID: &str = "ALL_PATHS_INVALID";
-        pub const THERES_INVALID_PATHS: &str = "INVALID_PATHS";
+        pub const ANY_PATH_INVALID: &str = "INVALID_PATHS";
         pub const ALL_PATHS_RECEIVED: &str = "ALL_PATHS_RECEIVED";
         pub const CONNECT_HOST_FAILED: &str = "CONNECT_HOST_FAILED";
-        pub const UNREGISTERED_REMOTE: &str = "UNREGISTERED_REMOTE";
+        pub const UNREGISTERED_HOST: &str = "UNREGISTERED_HOST";
         pub const UNREGISTERED_LOCAL: &str = "UNREGISTERED_LOCAL";
-        pub const WAITING: &str = "WAITING";
-        pub const REMOTE_REGISTRATION_FAILED: &str = "REMOTE_REGISTRATION_FAILED";
-        pub const REGISTRATION_SUCCEED: &str = "REGISTRATION_SUCCEED";
-        pub const LOCAL_REGISTRATION_FAILED: &str = "LOCAL_REGISTRATION_FAILED";
+        pub const UNREGISTERED_REMOTE: &str = "UNREGISTERED_REMOTE";
+        pub const REMOTE_REGISTRATION_UNSUPPORTED: &str = "REMOTE_REG_UNSUPPORTED";
+        pub const REMOTE_REGISTRATION_REFUSED: &str = "REMOTE_REG_REFUSED";
+        pub const TRANS_REMOTE_REFUSED: &str = "TRANS_REMOTE_REFUSED";
+        pub const INVALID_PORT: &str = "INVALID_PORT";
+        pub const REMOTE_NO_PORT_AVAILABLE: &str = "REMOTE_NO_PORT_AVAILABLE";
+        pub const NO_PORT_AVAILABLE: &str = "NO_PORT_AVAILABLE";
+        // pub const WAITING: &str = "WAITING";
+        pub const REMOTE_REGISTRATION_FAILED: &str = "REMOTE_REG_FAILED";
+        pub const CLIENT_REGISTRATION_FAILED: &str = "CLIENT_REG_FAILED";
+        pub const REGISTRATION_SUCCEEDED: &str = "REG_SUCCEEDED";
+        pub const LOCAL_REGISTRATION_FAILED: &str = "LOCAL_REG_FAILED";
+        pub const REGISTRATION_REFUSED: &str = "REG_REFUSED";
+        pub const ALL_FILES_SUCCEEDED: &str = "ALL_FILES_SUCCEEDED";
+        pub const FILES_SUCCEEDED: &str = "FILES_SUCCEEDED";
+        pub const UNEXPECTED_END_FLAG: &str = "UNEXPECTED_END_FLAG";
+        pub const UNEXPECTED_SEND_RESPONSE: &str = "UNEXPECTED_SEND_RESP";
+        pub const RECV_REFUSED: &str = "RECV_REFUSED";
+        pub const RECEIVED: &str = "RECEIVED";
     }
 }
 
 mod global {
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, OnceLock};
+    use std::sync::OnceLock;
 
+    use smol_str::{format_smolstr, SmolStr, ToSmolStr};
     use tokio::sync::RwLock;
 
     use crate::config::ConfigStore;
     use crate::error::CommonError;
     use crate::log::Logger;
 
-    use crate::CommonResult;
+    use crate::{consts, CommonResult};
 
     // pub const BUF_SIZE: usize = 4096;
     // pub const NEWLINE: &str = "\r\n";
-    pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
-    pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
+
     static mut CONFIG_PATH: Option<PathBuf> = None;
+    static mut LOG_DIR: Option<PathBuf> = None;
 
     static HOME_PATH: OnceLock<PathBuf> = OnceLock::new();
     pub(crate) static mut GLOBAL_LOGGER: Logger = Logger::console_logger();
@@ -104,32 +143,71 @@ mod global {
         HOME_PATH.get_or_init(PathBuf::from(std::env::var("HOME").unwrap()))
     }
 
-    pub(crate) fn log_dir() -> &'static mut PathBuf {
-        static mut LOG_DIR: Option<PathBuf> = None;
+    pub(crate) fn log_dir() -> &'static Path {
         unsafe { LOG_DIR.get_or_insert(default_log_dir().to_owned()) }
+    }
+
+    pub(crate) fn set_log_dir(dir_path: PathBuf) {
+        unsafe {
+            LOG_DIR = Some(checked_log_dir(dir_path));
+        }
+    }
+
+    fn checked_log_dir(path: PathBuf) -> PathBuf {
+        if !path.is_dir() {
+            return default_log_dir().to_path_buf();
+        } else {
+            path
+        }
     }
 
     // pub(crate) fn fallback_to_default_config_store()
 
     pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
-        static mut CONFIG: Option<RwLock<ConfigStore>> = None;
+        static mut CONFIG: OnceLock<RwLock<ConfigStore>> = OnceLock::new();
         unsafe {
-            match CONFIG.as_mut() {
+            match CONFIG.get_mut() {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
-                    if let Err(e) = config_store.try_update_config().await {
+                    if let Err(e) = config_store.try_update_config() {
                         logger()
                             .error(smol_str::format_smolstr!(
                                 "Update config in config_store failed! Detail: {}",
                                 e
-                            ))
-                            .await;
+                            ));
                     }
                     conf_store_lock
                 }
-                None => CONFIG
-                    .get_or_insert(RwLock::new(ConfigStore::from_config_file().await)),
+                None => {
+                    let c = ConfigStore::from_config_file();
+                    let c_lock = RwLock::new(c);
+                    CONFIG.get_or_init(|| c_lock)
+                }
             }
+        }
+    }
+
+    static mut IPC_SVR_SOCK_NAME: SmolStr =
+        SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCKET_NAME);
+    static mut IPC_CLT_SOCK_NAME: SmolStr =
+        SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCKET_NAME);
+    pub(crate) fn server_ipc_socket_name() -> &'static str {
+        unsafe { IPC_SVR_SOCK_NAME.as_str() }
+    }
+
+    pub(crate) fn client_ipc_socket_name() -> &'static str {
+        unsafe { IPC_CLT_SOCK_NAME.as_str() }
+    }
+
+    pub(crate) fn set_server_ipc_socket_name(name: SmolStr) {
+        unsafe {
+            IPC_SVR_SOCK_NAME = name;
+        }
+    }
+
+    pub(crate) fn set_client_ipc_socket_name(name: SmolStr) {
+        unsafe {
+            IPC_CLT_SOCK_NAME = name;
         }
     }
 
@@ -151,9 +229,9 @@ mod global {
 
     fn check_path(mut path_for_check: PathBuf) -> CommonResult<PathBuf> {
         if path_for_check.is_symlink() {
-            return Err(CommonError::ConfigPathErr(format!(
-                "Symbolic link for config path is not supported!"
-            )));
+            return Err(CommonError::ConfigPathErr(
+                "Symbolic link for config path is not supported!".to_smolstr(),
+            ));
         }
         if path_for_check.is_file() || path_for_check == default_config_path() {
             return Ok(path_for_check);
@@ -161,7 +239,7 @@ mod global {
 
         fn try_create_dir(dir_path: &Path) -> CommonResult<()> {
             if !dir_path.exists() && std::fs::create_dir_all(&dir_path).is_err() {
-                return Err(CommonError::ConfigPathErr(format!(
+                return Err(CommonError::ConfigPathErr(format_smolstr!(
                     "Create dir failed: {}, please check it validity!",
                     dir_path.to_string_lossy()
                 )));
@@ -179,7 +257,7 @@ mod global {
         if !path_for_check.is_dir() {
             try_create_dir(&path_for_check)?;
         }
-        path_for_check.push(DEFAULT_CONFIG_FILE_NAME);
+        path_for_check.push(consts::DEFAULT_CONFIG_FILE_NAME);
         Ok(path_for_check)
     }
 
@@ -192,11 +270,11 @@ mod global {
         unsafe {
             DEFAULT_CONFIG_PATH.get_or_init(|| {
                 let mut path = home_path().to_owned();
-                path.push(DEFAULT_CONFIG_DIR_NAME);
+                path.push(consts::DEFAULT_CONFIG_DIR_NAME);
                 if !path.exists() {
                     std::fs::create_dir_all(&path).unwrap();
                 }
-                path.push(DEFAULT_CONFIG_FILE_NAME);
+                path.push(consts::DEFAULT_CONFIG_FILE_NAME);
                 path
             })
         }
@@ -320,7 +398,7 @@ mod tests {
 
     #[test]
     fn tokio_blocking_write_test() {
-        let r = tokio::runtime::Builder::new_multi_thread()
+        let _r = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
