@@ -1,8 +1,7 @@
 use fshare_server::server;
 
 fn main() {
-    let server = server::Server::default();
-    if let Err(e) = server.start(){
+    if let Err(e) = server::Server::default().start(){
         eprintln!("Start server failed: {}", e);
     }
 }

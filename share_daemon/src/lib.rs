@@ -1,23 +1,15 @@
-use error::CommonError;
-
 pub mod config;
-
-pub mod error;
-pub(crate) mod filedata;
-pub(crate) mod handler;
-pub(crate) mod log;
 pub mod server;
-pub(crate) mod util;
 
-pub type CommonResult<T> = Result<T, CommonError>;
-
-// pub type CommonResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) mod handler;
 
 pub mod consts {
     use std::{
         net::{IpAddr, Ipv4Addr, SocketAddr},
         time::Duration,
     };
+    pub(crate) const GET_HOME_DIR_FAILED: &str =
+        "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
 
     pub const KB: usize = 1024;
     pub const MB: usize = usize::pow(KB, 2);
@@ -26,13 +18,13 @@ pub mod consts {
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
 
     pub const FILE_NAME_LENGTH_LIMIT: usize = 260;
-    // pub 
+    // pub
 
     pub const DEFAULT_CLIENT_IPC_SOCKET_NAME: &str = "share-client.sock";
     pub const DEFAULT_SERVER_IPC_SOCKET_NAME: &str = "share-server.sock";
     pub const UNSPECIFIED_PORT: u16 = 0;
     pub const PORT_TEST_BOUND: u16 = 1000;
-    
+
     pub const DEFAULT_LISTENER_ADDR: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT);
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
@@ -53,7 +45,7 @@ pub mod consts {
         pub const TRANSFER_START: &str = "TRANSFER_START";
         pub const TRANSFER_END: &str = "TRANSFER_END";
     }
-    
+
     pub mod request {
         pub const SHARE: &str = "SHARE";
         pub const HOST_REG: &str = "REG";
@@ -61,14 +53,12 @@ pub mod consts {
         pub const REG_ME: &str = "REG_ME";
         pub const REG_FROM: &str = "REG_FROM";
         pub const FILES_RECV: &str = "FILES_RECV";
-
     }
     pub mod reply {
         pub const ACCEPT: &str = "ACCEPT";
         pub const REJECT: &str = "REJECT";
         pub const INVALID_RECV_DIR: &str = "INVALID_RECV_DIR";
-        
-        
+
         /// which means the remote host can not accept a request
         pub const REMOTE_STREAM_UNWRITABLE: &str = "REMOTE_STREAM_UNWRITABLE";
         pub const REMOTE_UNRESPONSIVE: &str = "REMOTE_UNRESPONSIVE";
@@ -112,17 +102,15 @@ pub mod consts {
 
 mod global {
     use std::ffi::OsStr;
+    use std::fs::File;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    use smol_str::{format_smolstr, SmolStr, ToSmolStr};
+    use smol_str::{format_smolstr, SmolStr};
     use tokio::sync::RwLock;
 
     use crate::config::ConfigStore;
-    use crate::error::CommonError;
-    use crate::log::Logger;
-
-    use crate::{consts, CommonResult};
+    use crate::consts;
 
     // pub const BUF_SIZE: usize = 4096;
     // pub const NEWLINE: &str = "\r\n";
@@ -130,21 +118,8 @@ mod global {
     static mut CONFIG_PATH: Option<PathBuf> = None;
     static mut LOG_DIR: Option<PathBuf> = None;
 
-    static HOME_PATH: OnceLock<PathBuf> = OnceLock::new();
-    pub(crate) static mut GLOBAL_LOGGER: Logger = Logger::console_logger();
-
-    #[cfg(windows)]
-    pub(crate) fn home_path() -> &'static Path {
-        HOME_PATH.get_or_init(|| PathBuf::from(std::env::var("USERPROFILE").unwrap()))
-    }
-
-    #[cfg(not(windows))]
-    pub(crate) fn home_path() -> PathBuf {
-        HOME_PATH.get_or_init(PathBuf::from(std::env::var("HOME").unwrap()))
-    }
-
     pub(crate) fn log_dir() -> &'static Path {
-        unsafe { LOG_DIR.get_or_insert(default_log_dir().to_owned()) }
+        unsafe { LOG_DIR.get_or_insert(default_log_dir()) }
     }
 
     pub(crate) fn set_log_dir(dir_path: PathBuf) {
@@ -154,14 +129,36 @@ mod global {
     }
 
     fn checked_log_dir(path: PathBuf) -> PathBuf {
-        if !path.is_dir() {
-            return default_log_dir().to_path_buf();
+        if path.is_dir() {
+            return path;
+        }
+        if path.is_file() || path.is_symlink() || path.extension().is_some() {
+            return default_log_dir();
+        }
+        if !path.exists() {
+            std::fs::create_dir_all(&path).expect("Create log dir failed!!!");
+        }
+        path
+    }
+    
+    pub(crate) fn open_log_file() -> File {
+        let mut log_file_path = log_dir().to_owned();
+        log_file_path.push("tinyfileshare.log");
+        let mut open_options = File::options();
+        if log_file_path.exists() {
+            open_options.append(true);
         } else {
-            path
+            open_options.write(true).create(true);
+        }
+        match open_options.open(log_file_path) {
+            Ok(f) => f,
+            Err(e) => panic!(
+                "Error occurred while open or create log file! Detail: {}",
+                e
+            ),
         }
     }
 
-    // pub(crate) fn fallback_to_default_config_store()
 
     pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
         static mut CONFIG: OnceLock<RwLock<ConfigStore>> = OnceLock::new();
@@ -170,11 +167,7 @@ mod global {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
                     if let Err(e) = config_store.try_update_config() {
-                        logger()
-                            .error(smol_str::format_smolstr!(
-                                "Update config in config_store failed! Detail: {}",
-                                e
-                            ));
+                        log::error!("Update config in config_store failed! Detail: {}", e);
                     }
                     conf_store_lock
                 }
@@ -220,26 +213,27 @@ mod global {
         })
     }
 
-    pub(crate) fn set_config_path(path: PathBuf) -> CommonResult<()> {
+    pub(crate) fn set_config_path(path: PathBuf) -> anyhow::Result<()> {
         unsafe {
             CONFIG_PATH = Some(check_path(path)?);
         }
         Ok(())
     }
 
-    fn check_path(mut path_for_check: PathBuf) -> CommonResult<PathBuf> {
+    fn check_path(mut path_for_check: PathBuf) -> anyhow::Result<PathBuf> {
         if path_for_check.is_symlink() {
-            return Err(CommonError::ConfigPathErr(
-                "Symbolic link for config path is not supported!".to_smolstr(),
+            return Err(anyhow::Error::msg(
+                "Symbolic link for config path is not supported!",
             ));
         }
+
         if path_for_check.is_file() || path_for_check == default_config_path() {
             return Ok(path_for_check);
         }
 
-        fn try_create_dir(dir_path: &Path) -> CommonResult<()> {
-            if !dir_path.exists() && std::fs::create_dir_all(&dir_path).is_err() {
-                return Err(CommonError::ConfigPathErr(format_smolstr!(
+        fn try_create_dir(dir_path: &Path) -> anyhow::Result<()> {
+            if !dir_path.exists() && std::fs::create_dir_all(dir_path).is_err() {
+                return Err(anyhow::Error::msg(format_smolstr!(
                     "Create dir failed: {}, please check it validity!",
                     dir_path.to_string_lossy()
                 )));
@@ -269,7 +263,7 @@ mod global {
         static mut DEFAULT_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
         unsafe {
             DEFAULT_CONFIG_PATH.get_or_init(|| {
-                let mut path = home_path().to_owned();
+                let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
                 path.push(consts::DEFAULT_CONFIG_DIR_NAME);
                 if !path.exists() {
                     std::fs::create_dir_all(&path).unwrap();
@@ -280,136 +274,14 @@ mod global {
         }
     }
 
-    pub(crate) fn default_log_dir() -> &'static Path {
-        static mut DEFAULT_LOG_DIR: Option<PathBuf> = None;
-        unsafe {
-            DEFAULT_LOG_DIR.get_or_insert_with(|| {
-                let mut default_log_dir = exec_dir_path().to_path_buf();
-                default_log_dir.push("log");
-                default_log_dir
-            })
-        }
-    }
-
-    pub(crate) fn logger() -> &'static Logger {
-        unsafe { &*std::ptr::addr_of!(GLOBAL_LOGGER) }
+    pub(crate) fn default_log_dir() -> PathBuf {
+        let mut default_log_dir = exec_dir_path().to_path_buf();
+        default_log_dir.push("log");
+        std::fs::create_dir_all(&default_log_dir)
+            .expect("Unexpected error occurred while create log dir!");
+        default_log_dir
     }
 }
 
 #[cfg(test)]
-mod tests {
-
-    use std::hash::DefaultHasher;
-    use std::hash::Hash;
-    use std::hash::Hasher;
-    use std::io::BufRead;
-    use std::io::Cursor;
-    use std::ops::AddAssign;
-    use std::sync::atomic::AtomicI64;
-
-    use chrono::Datelike;
-
-    #[test]
-    fn std_hash_test() {
-        let s1 = "19900925_fliny_iiiipadjfemg";
-        let s2 = "19900925_fliny_iiiipadjfemg";
-        let mut s1_hasher = DefaultHasher::default();
-        s1.hash(&mut s1_hasher);
-        let s1_hashvalue = s1_hasher.finish();
-        let mut s2_hasher = DefaultHasher::default();
-        s2.hash(&mut s2_hasher);
-        let s2_hashvalue = s2_hasher.finish();
-
-        assert_eq!(s1_hashvalue, s2_hashvalue);
-        println!("hash value = {}", s2_hashvalue);
-    }
-
-    #[test]
-    fn chrono_test() {
-        let dt = chrono::Local::now();
-        let day = dt.day();
-        let dat_naive = dt.date_naive();
-        println!(
-            "day = {}, date_naive = {}, date raw = {}",
-            day, dat_naive, dt
-        );
-    }
-
-    #[test]
-    fn test_read_line() {
-        let content = "inner content line 1\r\n\r\nline content 3";
-        let mut cursor = Cursor::new(content);
-
-        let mut line = String::new();
-        let mut i = 0;
-
-        while let Ok(size) = cursor.read_line(&mut line) {
-            if size == 0 {
-                break;
-            }
-            i += 1;
-            println!("read line {} size = {}; content = {}", i, size, line);
-            line.clear();
-        }
-        // if let Ok(size) = size_res {
-        //     println!("read size = {}, content size = {}", size, content.len());
-        // } else {
-        //     eprintln!("{}", size_res.unwrap_err());
-        // }
-        // let size = reader.read_line(&mut line).unwrap();
-        // println!("{:?}", line.trim().chars());
-    }
-
-    #[test]
-    fn chrono_year_month_test() {
-        let now = chrono::Local::now();
-
-        assert_eq!(2024, now.year());
-        assert_eq!(6, now.month());
-    }
-
-    #[test]
-    fn cae_test() {
-        static mut NOW: AtomicI64 = AtomicI64::new(0);
-        let new_time = chrono::Local::now().timestamp();
-        unsafe {
-            _ = NOW.compare_exchange(
-                NOW.load(std::sync::atomic::Ordering::Relaxed),
-                new_time,
-                std::sync::atomic::Ordering::Acquire,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            assert_eq!(NOW.load(std::sync::atomic::Ordering::Relaxed), new_time);
-        }
-    }
-
-    fn num_lock() -> &'static std::sync::RwLock<i32> {
-        static mut NUM_LOCK: Option<std::sync::RwLock<i32>> = None;
-        unsafe {
-            match NUM_LOCK.as_ref() {
-                Some(lock) => {
-                    lock.write().unwrap().add_assign(400);
-                    lock
-                }
-                None => NUM_LOCK.get_or_insert(std::sync::RwLock::new(10)),
-            }
-        }
-    }
-
-    #[test]
-    fn tokio_blocking_write_test() {
-        let _r = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async { do_sth_async() });
-    }
-
-    fn do_sth_async() {
-        let v = num_lock().read().unwrap();
-        println!("current num = {}", *v);
-        let mut v_mut = num_lock().write().unwrap();
-        v_mut.add_assign(100);
-        println!("after mut, num = {}", v_mut);
-    }
-}
+mod tests {}

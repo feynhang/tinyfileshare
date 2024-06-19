@@ -1,6 +1,6 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
 };
 
@@ -18,23 +18,23 @@ use tokio::{
 };
 
 pub trait WriteLine {
-    async fn write_line<S: AsRef<str>>(&mut self, str: S) -> tokio::io::Result<()>;
+    async fn write_line<S: AsRef<str>>(&mut self, str: S) -> std::io::Result<()>;
 }
 
 impl<W> WriteLine for W
 where
     W: AsyncWriteExt + ?Sized + std::marker::Unpin,
 {
-    async fn write_line<S: AsRef<str>>(&mut self, str: S) -> tokio::io::Result<()> {
+    async fn write_line<S: AsRef<str>>(&mut self, str: S) -> std::io::Result<()> {
         self.write_all(str.as_ref().as_bytes()).await?;
         self.write_all(consts::LINE_SEP.as_bytes()).await?;
         self.flush().await
     }
 }
 
-use crate::{consts, error::CommonError, global, CommonResult};
+use crate::{consts, global};
 
-pub(crate) async fn handle_local(stream: LocalStream) -> tokio::io::Result<()> {
+pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.split();
     let mut reader = tokio::io::BufReader::new(read_half).take(2);
     let mut method_bytes = vec![];
@@ -90,9 +90,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> tokio::io::Result<()> {
                         let pair: Vec<_> = host_pair.trim().split(':').collect();
                         if pair.len() == 2 {
                             if let Ok(addr) = SocketAddr::from_str(pair[1]) {
-                                if let Err(CommonError::FailureResponse(fail_resp)) =
-                                    try_register_to_remote(addr).await
-                                {
+                                if let Ok(Some(fail_resp)) = try_register_to_remote(addr).await {
                                     write_half.write_line(fail_resp).await?;
                                     return Ok(());
                                 }
@@ -142,7 +140,7 @@ async fn handle_file_send(
     remote_addr: SocketAddr,
     mut local_write_half: SendHalf,
     files_paths: Vec<PathBuf>,
-) -> tokio::io::Result<()> {
+) -> std::io::Result<()> {
     if let Ok(remote_stream) = TcpStream::connect(remote_addr).await {
         let (remote_read_half, mut remote_write_half) = remote_stream.into_split();
         remote_write_half
@@ -169,11 +167,13 @@ async fn handle_file_send(
                 return Ok(());
             }
             if resp_parts[0] == consts::reply::NO_PORT_AVAILABLE {
-                local_write_half.write_line(consts::reply::REMOTE_NO_PORT_AVAILABLE).await?;
+                local_write_half
+                    .write_line(consts::reply::REMOTE_NO_PORT_AVAILABLE)
+                    .await?;
                 return Ok(());
             }
             if resp_parts[0] == consts::reply::PORT_CONFIRM && resp_parts.len() == 2 {
-                if let Ok(port) = u16::from_str_radix(resp_parts[1], 10) {
+                if let Ok(port) = resp_parts[1].parse::<u16>() {
                     return send_files(
                         local_write_half,
                         SocketAddr::from((remote_addr.ip(), port)),
@@ -197,7 +197,7 @@ async fn handle_file_send(
     Ok(())
 }
 
-async fn try_register_to_remote(remote_host: SocketAddr) -> CommonResult<()> {
+async fn try_register_to_remote(remote_host: SocketAddr) -> anyhow::Result<Option<&'static str>> {
     let remote_stream = TcpStream::connect(remote_host).await?;
     let (read_half, mut write_half) = remote_stream.into_split();
     if write_half.writable().await.is_ok() {
@@ -208,25 +208,21 @@ async fn try_register_to_remote(remote_host: SocketAddr) -> CommonResult<()> {
             if reader.read_line(&mut line).await? != 0 {
                 let resp = line.trim();
                 if resp == consts::reply::REGISTRATION_SUCCEEDED {
-                    return Ok(());
+                    return Ok(None);
                 }
                 if resp == consts::reply::REMOTE_REGISTRATION_UNSUPPORTED {
-                    return Err(CommonError::FailureResponse(
-                        consts::reply::REMOTE_REGISTRATION_UNSUPPORTED,
-                    ));
+                    return Ok(Some(consts::reply::REMOTE_REGISTRATION_UNSUPPORTED));
                 }
             }
         }
     }
-    Err(CommonError::FailureResponse(
-        consts::reply::REMOTE_REGISTRATION_FAILED,
-    ))
+    Ok(Some(consts::reply::REMOTE_REGISTRATION_FAILED))
 }
 
 async fn try_register_to_local(
     hostname: &str,
     host_addr: SocketAddr,
-) -> CommonResult<Option<SocketAddr>> {
+) -> anyhow::Result<Option<SocketAddr>> {
     let conf_store_lock = global::config_store().await;
     let mut config_store = conf_store_lock.write().await;
     let replaced = config_store.register_host(hostname, host_addr);
@@ -250,7 +246,7 @@ async fn reply_unexpected(
     Ok(())
 }
 
-pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> CommonResult<()> {
+pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> anyhow::Result<()> {
     let (remote_read_half, mut remote_writer) = stream.into_split();
     let config_lock = global::config_store().await;
     if remote_read_half.readable().await.is_ok() {
@@ -262,12 +258,6 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> C
                 consts::request::PORT_EXPECTED if line_parts.len() == 2 => {
                     if config_lock.read().await.check_addr_registered(peer_addr) {
                         let client_res = try_create_client_ipc_stream().await;
-                        let mut recv_dir = global::config_store()
-                            .await
-                            .read()
-                            .await
-                            .receive_dir()
-                            .to_owned();
                         if let Ok(client_stream) = client_res {
                             let (client_read_half, mut client_writer) = client_stream.split();
                             client_writer
@@ -295,7 +285,11 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> C
                                         client_writer.shutdown().await?;
                                         drop(client_reader);
                                     } else {
-                                        recv_dir = p;
+                                        global::config_store()
+                                            .await
+                                            .write()
+                                            .await
+                                            .set_receive_dir(p);
                                     }
                                 }
                             } else {
@@ -306,10 +300,10 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> C
                                 drop(client_reader);
                             }
                         }
-                        if let Ok(expected_port) = u16::from_str_radix(line_parts[1], 10) {
-                            if let Ok(l) = try_create_listener(expected_port).await {
+                        if let Ok(expected_port) = line_parts[1].parse::<u16>() {
+                            if let Some(l) = create_receive_listener(expected_port).await {
                                 let actual_port = l.local_addr()?.port();
-                                tokio::spawn(receive_files(l, peer_addr.ip(), recv_dir));
+                                tokio::spawn(receive_files(l, peer_addr.ip()));
                                 remote_writer
                                     .write_line(format_smolstr!(
                                         "{} {}",
@@ -388,27 +382,25 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> C
     Ok(())
 }
 
-async fn try_create_listener(port: u16) -> CommonResult<tokio::net::TcpListener> {
+async fn create_receive_listener(port: u16) -> Option<tokio::net::TcpListener> {
     for p in port..u16::MAX {
         if let Ok(l) = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, p)).await {
-            return Ok(l);
+            return Some(l);
         }
     }
     for p in port..1 {
         if let Ok(l) = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, p)).await {
-            return Ok(l);
+            return Some(l);
         }
     }
-    Err(CommonError::FailureResponse(
-        consts::reply::NO_PORT_AVAILABLE,
-    ))
+    None
 }
 
 async fn send_files(
     mut local_write_half: SendHalf,
     dest_addr: SocketAddr,
     files_paths: Vec<PathBuf>,
-) -> tokio::io::Result<()> {
+) -> std::io::Result<()> {
     let dest_stream = TcpStream::connect(dest_addr).await?;
     let (read_half, write_half) = dest_stream.into_split();
     let mut dest_writer = BufWriter::new(write_half);
@@ -460,9 +452,9 @@ async fn send_files(
     let mut line = String::new();
     if reader.read_line(&mut line).await? != 0 && !line.trim().is_empty() {
         let recv_resp: Vec<&str> = line.split(' ').collect();
-        if recv_resp.len() == 2 && recv_resp[0] == consts::reply::RECEIVED {
-            if let Ok(recv_count) = u8::from_str_radix(recv_resp[1], 10) {
-                if recv_count as usize == files_paths.len() {
+        if recv_resp[0] == consts::reply::RECEIVED && recv_resp.len() == 2 {
+            if let Ok(recv_count) = recv_resp[1].parse::<usize>() {
+                if recv_count == files_paths.len() {
                     local_write_half
                         .write_line(consts::reply::ALL_FILES_SUCCEEDED)
                         .await?;
@@ -489,11 +481,7 @@ async fn send_files(
     Ok(())
 }
 
-async fn receive_files(
-    listener: TcpListener,
-    send_host_ip: IpAddr,
-    mut recv_dir: PathBuf,
-) -> tokio::io::Result<()> {
+async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::Result<()> {
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         if peer_addr.ip() == send_host_ip {
@@ -508,53 +496,57 @@ async fn receive_files(
 
                 line.clear();
                 reader.set_limit(4);
+                let mut recv_dir = global::config_store()
+                    .await
+                    .read()
+                    .await
+                    .receive_dir()
+                    .to_path_buf();
                 while reader.read_line(&mut line).await? != 0 && line.trim().is_empty() {
                     reader.set_limit(consts::FILE_NAME_LENGTH_LIMIT as u64 + 30);
                     line.clear();
-                    if reader.read_line(&mut line).await? != 0 {
-                        let trimmed_line = line.trim();
-                        if trimmed_line == consts::trans_flag::TRANSFER_END {
-                            if files_count > 0 {
-                                write_half
-                                    .write_line(format_smolstr!(
-                                        "{} {}",
-                                        consts::reply::RECEIVED,
-                                        files_count
-                                    ))
-                                    .await?;
-                                return Ok(());
-                            } else {
-                                break;
-                            }
-                        }
-                        let parts: Vec<&str> = trimmed_line.split(':').collect();
-                        if parts.len() == 2 {
-                            let name = parts[0];
-                            if let Ok(file_size) = usize::from_str_radix(parts[1], 10) {
-                                reader.set_limit(file_size as u64);
-                                recv_dir.push(name);
-                                let f = RwLock::new(File::create(&recv_dir).await?);
-                                let mut file_writer = f.write().await;
-                                loop {
-                                    let mut buf = [0; consts::FILE_TRANS_BUF_SIZE];
-                                    let read_size = reader.read(&mut buf).await?;
-                                    if read_size == 0 {
-                                        break;
-                                    }
-                                    file_writer.write_all(&buf[0..read_size]).await?;
-                                }
-                                file_writer.flush().await?;
-                                files_count += 1;
-                                line.clear();
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    } else {
+                    if reader.read_line(&mut line).await? == 0 {
                         break;
                     }
+                    let trimmed_line = line.trim();
+                    if trimmed_line == consts::trans_flag::TRANSFER_END {
+                        if files_count == 0 {
+                            break;
+                        }
+                        write_half
+                            .write_line(format_smolstr!(
+                                "{} {}",
+                                consts::reply::RECEIVED,
+                                files_count
+                            ))
+                            .await?;
+                        return Ok(());
+                    }
+                    let parts: Vec<&str> = trimmed_line.split(':').collect();
+                    if parts.len() != 2 {
+                        break;
+                    }
+
+                    let name = parts[0];
+                    let file_size_res = parts[1].parse::<usize>();
+                    if file_size_res.is_err() {
+                        break;
+                    }
+                    reader.set_limit(file_size_res.unwrap() as u64);
+                    recv_dir.push(name);
+                    let f = RwLock::new(File::create(&recv_dir).await?);
+                    let mut file_writer = f.write().await;
+                    loop {
+                        let mut buf = [0; consts::FILE_TRANS_BUF_SIZE];
+                        let read_size = reader.read(&mut buf).await?;
+                        if read_size == 0 {
+                            break;
+                        }
+                        file_writer.write_all(&buf[0..read_size]).await?;
+                    }
+                    file_writer.flush().await?;
+                    files_count += 1;
+                    line.clear();
                 }
                 if files_count > 0 {
                     write_half

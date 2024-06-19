@@ -10,7 +10,7 @@ use std::{
 
 use smol_str::ToSmolStr;
 
-use crate::{error::CommonError, global, CommonResult};
+use crate::{consts, global};
 
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
 pub(crate) const MAX_WORKERS: u8 = 120;
@@ -48,24 +48,23 @@ impl ConfigStore {
         match Self::try_from_file() {
             Ok(config) => config,
             Err(e) => {
-                global::logger().warn(smol_str::format_smolstr!(
-                    "Error occurred while try read config from file! Sever will use default. Detail: {}",
+                log::warn!(
+                    "Error occurred while try read config from file! Server will use default. Detail: {}",
                     e
-                ));
+                );
                 let mut default_config_store = Self::default();
                 if let Err(e) = default_config_store.save_to_file() {
-                    global::logger()
-                        .error(smol_str::format_smolstr!(
-                            "Error occurred while write default config to file!!! Detail: {}",
-                            e
-                        ));
+                    log::error!(
+                        "Error occurred while write default config to file!!! Detail: {}",
+                        e
+                    );
                 }
                 default_config_store
             }
         }
     }
 
-    fn try_from_file() -> CommonResult<Self> {
+    fn try_from_file() -> anyhow::Result<Self> {
         let mut f = File::open(global::config_path())?;
         let mut content = vec![];
         if f.read_to_end(&mut content)? > 0 {
@@ -80,24 +79,19 @@ impl ConfigStore {
                 last_modified: modified,
             });
         }
-        Err(CommonError::SimpleError(
-            "Config file is empty!".to_smolstr(),
-        ))
+        Err(anyhow::Error::msg("Config file is empty!".to_smolstr()))
     }
 
-    pub(crate) fn try_update_config(&mut self) -> CommonResult<()> {
+    pub(crate) fn try_update_config(&mut self) -> anyhow::Result<()> {
         let mut f = File::open(global::config_path())?;
         let modified_res = f.metadata()?.modified();
         if let Ok(last_mod_time) = modified_res {
-            match self.last_modified {
-                LastModified::LastModTime(time) => {
-                    if time == last_mod_time {
-                        return Ok(());
-                    } else {
-                        self.last_modified = LastModified::LastModTime(time);
-                    }
+            if let LastModified::LastModTime(time) = self.last_modified {
+                if time == last_mod_time {
+                    return Ok(());
+                } else {
+                    self.last_modified = LastModified::LastModTime(time);
                 }
-                _ => (),
             }
         }
         let mut bytes = vec![];
@@ -170,7 +164,7 @@ impl Config {
     }
 
     pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::checked_save_dir(file_save_dir.into());
+        self.receive_dir = Self::checked_receive_dir(file_save_dir.into());
     }
 
     pub(crate) fn receive_dir(&self) -> &Path {
@@ -180,7 +174,7 @@ impl Config {
     pub(crate) fn num_workers(&self) -> u8 {
         self.num_workers
     }
-    
+
     pub(crate) fn set_num_workers(&mut self, n: u8) {
         self.num_workers = Self::checked_num_workers(n);
     }
@@ -196,7 +190,7 @@ impl Config {
     pub(crate) fn set_listener_port(&mut self, port: u16) {
         self.listener_addr.set_port(port);
     }
-    
+
     pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
         self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
     }
@@ -204,7 +198,7 @@ impl Config {
     pub(crate) fn get_host(&self, name: &str) -> Option<&SocketAddr> {
         self.reg_hosts.get(name)
     }
-    
+
     fn checked_num_workers(num: u8) -> u8 {
         if num == 0 || num > MAX_WORKERS {
             DEFAULT_NUM_WORKERS
@@ -214,50 +208,34 @@ impl Config {
     }
 
     fn default_save_dir() -> PathBuf {
-        let mut save_dir = global::home_path().to_path_buf();
+        let mut save_dir = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
         save_dir.push("tinyfileshare");
         save_dir.push("recv");
         if !save_dir.exists() {
             std::fs::create_dir_all(&save_dir)
                 .expect("Unexpected: create default receive directory failed!");
         }
-        return save_dir;
+        save_dir
     }
 
-
-    // fn checked_trans_parallel(num: u8) -> u8 {
-    //     if num > MAX_PARALLEL {
-    //         MAX_PARALLEL
-    //     } else {
-    //         num
-    //     }
-    // }
-
-    fn checked_save_dir(path: PathBuf) -> PathBuf {
+    fn checked_receive_dir(path: PathBuf) -> PathBuf {
         if path.is_dir() {
             return path;
         }
-        let logger = global::logger();
-        if path.is_file() || path.is_symlink() || !path.extension().is_none() {
-            logger
-                .warn("Invalid save_dir for config, use default instead.");
+        if path.is_file() || path.is_symlink() || path.extension().is_some() {
+            log::warn!("Invalid save_dir for config, use default instead.");
             return Self::default_save_dir();
         }
-        if !path.exists() {
-            if std::fs::create_dir_all(&path).is_err() {
-                logger
-                    .warn("Create save_dir directory failed, use default instead.");
-                return Self::default_save_dir();
-            }
+        if !path.exists() && std::fs::create_dir_all(&path).is_err() {
+            log::warn!("Create save_dir directory failed, use default instead.");
+            return Self::default_save_dir();
         }
-        return path;
+        path
     }
 
     fn checked(mut self) -> Self {
-        // self.log_dir = Self::checked_log_dir(self.log_dir);
-        // self.trans_parallel = Self::checked_trans_parallel(self.trans_parallel);
         self.num_workers = Self::checked_num_workers(self.num_workers);
-        self.receive_dir = Self::checked_save_dir(self.receive_dir);
+        self.receive_dir = Self::checked_receive_dir(self.receive_dir);
         self
     }
 
@@ -296,7 +274,7 @@ mod tests {
             .unwrap()
     }
 
-    const TEMP_CONF_PATH: &str = "C:\\Users\\feyn\\.cache\\tinyfileshare\\configdir";
+    // const TEMP_CONF_PATH: &str = "C:\\Users\\feyn\\.cache\\tinyfileshare\\configdir";
 
     #[test]
     fn read_file_err_test() {
