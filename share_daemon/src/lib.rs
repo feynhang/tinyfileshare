@@ -8,6 +8,8 @@ pub mod consts {
         net::{IpAddr, Ipv4Addr, SocketAddr},
         time::Duration,
     };
+
+    pub const DEFAULT_LISTENER_PORT: u16 = 10020;
     pub(crate) const GET_HOME_DIR_FAILED: &str =
         "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
 
@@ -26,7 +28,7 @@ pub mod consts {
     pub const PORT_TEST_BOUND: u16 = 1000;
 
     pub const DEFAULT_LISTENER_ADDR: SocketAddr =
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), UNSPECIFIED_PORT);
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_LISTENER_PORT);
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
     pub const LINE_SEP: &str = "\r\n";
@@ -58,7 +60,7 @@ pub mod consts {
         pub const ACCEPT: &str = "ACCEPT";
         pub const REJECT: &str = "REJECT";
         pub const INVALID_RECV_DIR: &str = "INVALID_RECV_DIR";
-
+     
         /// which means the remote host can not accept a request
         pub const REMOTE_STREAM_UNWRITABLE: &str = "REMOTE_STREAM_UNWRITABLE";
         pub const REMOTE_UNRESPONSIVE: &str = "REMOTE_UNRESPONSIVE";

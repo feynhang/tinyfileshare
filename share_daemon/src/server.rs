@@ -18,7 +18,7 @@ pub struct Server {
     client_ipc_sock_name: SmolStr,
     log_to_file: bool,
     log_dir: PathBuf,
-    log_level: log::LevelFilter,
+    max_log_level: log::LevelFilter,
     config: Config,
     use_config_file: bool,
 }
@@ -29,7 +29,7 @@ impl Default for Server {
             server_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCKET_NAME),
             client_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCKET_NAME),
             log_to_file: false,
-            log_level: log::LevelFilter::Warn,
+            max_log_level: log::LevelFilter::Info,
             log_dir: global::default_log_dir().to_owned(),
             config: Config::default(),
             use_config_file: false,
@@ -38,7 +38,7 @@ impl Default for Server {
 }
 
 impl Server {
-    fn init_logger(log_to_file: bool) -> anyhow::Result<()> {
+    fn init_logger(log_to_file: bool, max_log_level: log::LevelFilter) -> anyhow::Result<()> {
         let mut log_builder = env_logger::builder();
         if log_to_file {
             log_builder.target(env_logger::Target::Pipe(Box::new(global::open_log_file())));
@@ -46,6 +46,7 @@ impl Server {
             log_builder.target(env_logger::Target::Stdout);
         }
         log_builder
+            .filter_level(max_log_level)
             .format_level(true)
             .format_module_path(true)
             .init();
@@ -75,7 +76,7 @@ impl Server {
     }
 
     pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
-        self.log_level = level;
+        self.max_log_level = level;
         self
     }
 
@@ -185,7 +186,7 @@ impl Server {
 
     async fn start_inner(mut self) -> anyhow::Result<()> {
         global::set_log_dir(self.log_dir);
-        Self::init_logger(self.log_to_file)?;
+        Self::init_logger(self.log_to_file, self.max_log_level)?;
         if self.use_config_file {
             self.config = global::config_store().await.read().await.clone_inner();
         }
@@ -200,6 +201,7 @@ impl Server {
             remote_listener = listen_res.unwrap();
         }
         let local_addr = remote_listener.local_addr().unwrap();
+        log::info!("Server start at {}\n", local_addr);
         self.config.set_listener_addr(local_addr);
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;

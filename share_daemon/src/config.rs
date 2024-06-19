@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr},
+    net::SocketAddr,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     time::SystemTime,
@@ -145,10 +145,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            listener_addr: SocketAddr::from((
-                Ipv4Addr::UNSPECIFIED,
-                crate::consts::UNSPECIFIED_PORT,
-            )),
+            listener_addr: consts::DEFAULT_LISTENER_ADDR,
             num_workers: DEFAULT_NUM_WORKERS,
             receive_dir: Self::default_save_dir(),
             // trans_parallel: 0,
@@ -208,14 +205,14 @@ impl Config {
     }
 
     fn default_save_dir() -> PathBuf {
-        let mut save_dir = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
-        save_dir.push("tinyfileshare");
-        save_dir.push("recv");
-        if !save_dir.exists() {
-            std::fs::create_dir_all(&save_dir)
+        let mut receive_dir = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
+        receive_dir.push("tinyfileshare");
+        receive_dir.push("recv");
+        if !receive_dir.exists() {
+            std::fs::create_dir_all(&receive_dir)
                 .expect("Unexpected: create default receive directory failed!");
         }
-        save_dir
+        receive_dir
     }
 
     fn checked_receive_dir(path: PathBuf) -> PathBuf {
