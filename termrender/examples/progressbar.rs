@@ -8,6 +8,10 @@ fn running() -> bool {
     unsafe { RUNNING }
 }
 
+fn set_running(state: bool) {
+    unsafe { RUNNING = state };
+}
+
 #[derive(Debug)]
 pub struct SimpleErr;
 impl std::fmt::Display for SimpleErr {
@@ -18,31 +22,24 @@ impl std::fmt::Display for SimpleErr {
 impl std::error::Error for SimpleErr {}
 
 fn main() {
-    ctrlc::set_handler(|| unsafe { RUNNING = false }).expect("set ctrlc handler failed!");
+    ctrlc::set_handler(|| set_running(false)).expect("set ctrlc handler failed!");
     std::thread::spawn(|| {
         while running() {
-            let res = crossterm::event::read();
-            if res.is_err() {
-                continue;
-            }
-            match res.unwrap() {
-                event::Event::Key(k_evt) => match k_evt {
-                    event::KeyEvent {
-                        code: event::KeyCode::Esc,
-                        ..
-                    } => unsafe { RUNNING = false },
-                    _ => (),
-                },
-                _ => (),
+            if let Ok(event::Event::Key(event::KeyEvent {
+                code: event::KeyCode::Esc,
+                ..
+            })) = crossterm::event::read()
+            {
+                set_running(false);
+            } else {
+                std::thread::yield_now();
             }
         }
     });
 
     let mut i = 0.0;
     let size = 100.0;
-    unsafe {
-        RUNNING = true;
-    }
+    set_running(true);
     if let Err(e) = termrender::progress_bar(
         || {
             if !running() {

@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 share_daemon = { path = "../share_daemon" }
+clap = {version = "*", features = ["default", "derive"]}
+anyhow= "*"

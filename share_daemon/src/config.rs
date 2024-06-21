@@ -137,7 +137,6 @@ impl DerefMut for ConfigStore {
 pub struct Config {
     pub(crate) listener_addr: SocketAddr,
     num_workers: u8,
-    // trans_parallel: u8,
     receive_dir: PathBuf,
     reg_hosts: HashMap<String, SocketAddr>,
 }
@@ -147,8 +146,7 @@ impl Default for Config {
         Self {
             listener_addr: consts::DEFAULT_LISTENER_ADDR,
             num_workers: DEFAULT_NUM_WORKERS,
-            receive_dir: Self::default_save_dir(),
-            // trans_parallel: 0,
+            receive_dir: Self::default_recv_dir(),
             reg_hosts: HashMap::new(),
         }
     }
@@ -180,10 +178,6 @@ impl Config {
         self.listener_addr = addr;
     }
 
-    // pub(crate) fn set_listener_ip(&mut self, ip_addr: IpAddr) {
-    //     self.listener_addr.set_ip(ip_addr);
-    // }
-
     pub(crate) fn set_listener_port(&mut self, port: u16) {
         self.listener_addr.set_port(port);
     }
@@ -192,8 +186,8 @@ impl Config {
         self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
     }
 
-    pub(crate) fn get_host(&self, name: &str) -> Option<&SocketAddr> {
-        self.reg_hosts.get(name)
+    pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
+        self.reg_hosts.get(hostname)
     }
 
     fn checked_num_workers(num: u8) -> u8 {
@@ -204,13 +198,11 @@ impl Config {
         }
     }
 
-    fn default_save_dir() -> PathBuf {
-        let mut receive_dir = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
-        receive_dir.push("tinyfileshare");
-        receive_dir.push("recv");
+    fn default_recv_dir() -> PathBuf {
+        let receive_dir = dirs::download_dir().expect(consts::GET_HOME_DIR_FAILED);
         if !receive_dir.exists() {
             std::fs::create_dir_all(&receive_dir)
-                .expect("Unexpected: create default receive directory failed!");
+                .expect("Unexpected: create default receive(Download) directory failed!");
         }
         receive_dir
     }
@@ -220,12 +212,12 @@ impl Config {
             return path;
         }
         if path.is_file() || path.is_symlink() || path.extension().is_some() {
-            log::warn!("Invalid save_dir for config, use default instead.");
-            return Self::default_save_dir();
+            log::warn!("Invalid receive directory for config, use default instead.");
+            return Self::default_recv_dir();
         }
         if !path.exists() && std::fs::create_dir_all(&path).is_err() {
-            log::warn!("Create save_dir directory failed, use default instead.");
-            return Self::default_save_dir();
+            log::warn!("Receive directory donot exist, try create it failed, use default instead.");
+            return Self::default_recv_dir();
         }
         path
     }
@@ -234,62 +226,5 @@ impl Config {
         self.num_workers = Self::checked_num_workers(self.num_workers);
         self.receive_dir = Self::checked_receive_dir(self.receive_dir);
         self
-    }
-
-    #[allow(unused)]
-    pub(crate) fn new(
-        addr: SocketAddr,
-        num_workers: u8,
-        num_parallel: u8,
-        // log_dir: PathBuf,
-        save_dir: PathBuf,
-    ) -> Self {
-        Self {
-            // log_dir,
-            listener_addr: addr,
-            num_workers: Self::checked_num_workers(num_workers),
-            // trans_parallel: Self::checked_trans_parallel(num_parallel),
-            receive_dir: save_dir,
-            ..Default::default()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{fs::File, io::Write, path::PathBuf};
-
-    #[test]
-    fn create_dir_all_test() {
-        let mut path = PathBuf::from("C:\\Users\\feyn\\.cache\\from_tinyfileshare\\temp");
-
-        std::fs::create_dir_all(&path).unwrap();
-        path.push("config.toml");
-        File::create(&path)
-            .unwrap()
-            .write_all("temp contents".as_bytes())
-            .unwrap()
-    }
-
-    // const TEMP_CONF_PATH: &str = "C:\\Users\\feyn\\.cache\\tinyfileshare\\configdir";
-
-    #[test]
-    fn read_file_err_test() {
-        let res = std::fs::read_to_string("C:\\Users\\feyn\\.cache\\tinyfileshare\\");
-        assert_eq!(std::io::ErrorKind::NotFound, res.unwrap_err().kind())
-    }
-
-    #[test]
-    fn write_last_test() {
-        let mut f = File::options()
-            .append(true)
-            .read(true)
-            .open("C:/Users/feyn/.cache/tinyfileshare/temp.txt")
-            .unwrap();
-        let modified_before = f.metadata().unwrap().modified().unwrap();
-        f.write_all(b"\r\nnew content\r\n").unwrap();
-        // f.flush().unwrap();
-        let modified_after = f.metadata().unwrap().modified().unwrap();
-        assert_ne!(modified_after, modified_before);
     }
 }
