@@ -13,6 +13,20 @@ fn join_set() -> &'static mut JoinSet<()> {
     unsafe { JOIN_SET.get_or_insert(JoinSet::new()) }
 }
 
+pub(crate) fn init_global_logger(
+    log_target: env_logger::Target,
+    max_log_level: log::LevelFilter,
+) -> anyhow::Result<()> {
+    let mut log_builder = env_logger::builder();
+    log_builder
+        .target(log_target)
+        .filter_level(max_log_level)
+        .format_level(true)
+        .format_module_path(true)
+        .init();
+    Ok(())
+}
+
 pub struct Server {
     server_ipc_sock_name: SmolStr,
     client_ipc_sock_name: SmolStr,
@@ -36,19 +50,7 @@ impl Default for Server {
 }
 
 impl Server {
-    fn init_global_logger(
-        log_target: env_logger::Target,
-        max_log_level: log::LevelFilter,
-    ) -> anyhow::Result<()> {
-        let mut log_builder = env_logger::builder();
-        log_builder
-            .target(log_target)
-            .filter_level(max_log_level)
-            .format_level(true)
-            .format_module_path(true)
-            .init();
-        Ok(())
-    }
+
 
     pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
         self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
@@ -101,9 +103,9 @@ impl Server {
         self
     }
 
-    pub fn add_reg_host(&mut self, hostname: &str, host: SocketAddr) -> &mut Self {
-        self.config.register_host(hostname, host);
-        self
+    pub fn add_host_to_local(&mut self, hostname: &str, host: SocketAddr) -> anyhow::Result<&mut Self> {
+        self.config.register_host(Config::check_hostname(hostname)?, host);
+        Ok(self)
     }
 
     pub fn start(self) -> anyhow::Result<()> {
@@ -172,7 +174,7 @@ impl Server {
     }
 
     async fn start_inner(mut self) -> anyhow::Result<()> {
-        Self::init_global_logger(
+        init_global_logger(
             if let Some(t) = self.log_target {
                 t
             } else {
@@ -198,8 +200,8 @@ impl Server {
         self.config.set_listener_addr(local_addr);
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
-        config_store.set_config(self.config);
-        config_store.save_to_file()?;
+        config_store.set_config(self.config)?;
+        config_store.update_to_file()?;
         ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);

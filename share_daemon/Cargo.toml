@@ -21,9 +21,8 @@ chrono = "*"
 tokio = { version = "*", features = ["full"] }
 interprocess = {version = "*", features = ["tokio"]}
 ctrlc = "*"
-constcat = "*"
-smol_str = "*"
 log = "*"
 anyhow = "*"
 dirs = "*"
 env_logger = "*"
+smol_str = {version = "*", features = ["default", "serde"]}

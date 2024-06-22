@@ -7,7 +7,8 @@ pub(crate) mod handler;
 
 pub mod consts {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    pub const STARTLINE_PARTS_SEP: char = ' ';
+    pub const HOST_NAME_LENGTH_LIMIT: usize = 16;
+    pub const STARTLINE_PIAR_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
     pub const DEFAULT_LISTENER_PORT: u16 = 10020;
     pub(crate) const GET_HOME_DIR_FAILED: &str =
@@ -37,7 +38,7 @@ pub mod consts {
     pub const PATHS_NUM_PER_REQUEST: usize = crate::config::DEFAULT_NUM_WORKERS as usize - 1;
 
     pub const FILE_PATH_LIMIT: u64 = 500;
-    pub const HOSTNAME_LEN_LIMIT: u64 = 16;
+
     pub const MAX_IP_LEN: u64 = 46;
 }
 
@@ -60,15 +61,14 @@ mod global {
             match CONFIG.get_mut() {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
-                    if let Err(e) = config_store.try_update_config() {
-                        log::error!("Update config in config_store failed! Detail: {}", e);
+                    if let Err(e) = config_store.update_from_file() {
+                        log::error!("Update config in config_store failed and ignored it! Detail: {}", e);
                     }
                     conf_store_lock
                 }
                 None => {
                     let c = ConfigStore::from_config_file();
-                    let c_lock = RwLock::new(c);
-                    CONFIG.get_or_init(|| c_lock)
+                    CONFIG.get_or_init(|| RwLock::new(c))
                 }
             }
         }

@@ -37,10 +37,10 @@ use crate::{consts, global, request_tag, response_tag};
 pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
     let (local_read_half, mut local_write_half) = stream.split();
     let mut local_reader =
-        tokio::io::BufReader::new(local_read_half).take(consts::HOSTNAME_LEN_LIMIT + 50);
+        tokio::io::BufReader::new(local_read_half).take(consts::HOST_NAME_LENGTH_LIMIT as u64 + 50);
     let mut line = String::new();
     if local_reader.read_line(&mut line).await? != 0 {
-        if let Some((command, arg)) = line.trim().split_once(consts::STARTLINE_PARTS_SEP) {
+        if let Some((command, arg)) = line.trim().split_once(consts::STARTLINE_PIAR_SEP) {
             match command {
                 request_tag::local::SHARE => {
                     if let Some(host) = global::config_store()
@@ -80,6 +80,10 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                 }
                 request_tag::local::REG => {
                     if let Some((hostname, addr_str)) = arg.trim().split_once(consts::PAIR_SEP) {
+                        if hostname.len() > consts::HOST_NAME_LENGTH_LIMIT {
+                            local_write_half.write_line(response_tag::common::INVALID_HOSTNAME).await?;
+                            return Ok(());
+                        }
                         if let Ok(addr) = SocketAddr::from_str(addr_str) {
                             if let Ok(Some(fail_resp)) =
                                 try_register_to_remote(hostname, addr).await
@@ -120,6 +124,52 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
     Ok(())
 }
 
+
+async fn try_register_to_remote(
+    hostname: &str,
+    remote_host: SocketAddr,
+) -> anyhow::Result<Option<SmolStr>> {
+    let remote_stream = TcpStream::connect(remote_host).await?;
+    let (read_half, mut write_half) = remote_stream.into_split();
+    if write_half.writable().await.is_ok() {
+        write_half
+            .write_line(smol_str::format_smolstr!(
+                "{} {}",
+                request_tag::remote::REG_ME,
+                hostname
+            ))
+            .await?;
+        if read_half.readable().await.is_ok() {
+            let mut reader = BufReader::new(read_half).take(50);
+            let mut line = String::new();
+            if reader.read_line(&mut line).await? != 0 {
+                let remote_resp = line.trim();
+                match remote_resp {
+                    response_tag::common::REG_SUCCEEDED
+                    | response_tag::common::REG_REMOTE_UNSUPPORTED
+                    | response_tag::common::REG_REMOTE_REJECTED => {
+                        return Ok(Some(remote_resp.to_smolstr()))
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+    Ok(Some(response_tag::common::REG_REMOTE_FAILED.to_smolstr()))
+}
+
+async fn try_register_to_local(
+    hostname: &str,
+    host_addr: SocketAddr,
+) -> anyhow::Result<Option<SocketAddr>> {
+    let conf_store_lock = global::config_store().await;
+    let mut config_store = conf_store_lock.write().await;
+    let replaced = config_store.register_host(hostname, host_addr);
+    config_store.update_to_file()?;
+    Ok(replaced)
+}
+
+
 fn checked_expected_port(port: u16) -> u16 {
     if port.wrapping_add(1) == 0 {
         port.wrapping_add(11)
@@ -145,7 +195,7 @@ async fn handle_file_send(
         let mut line = String::with_capacity(50);
         let mut remote_reader = BufReader::with_capacity(128, remote_read_half).take(50);
         if remote_reader.read_line(&mut line).await? != 0 {
-            let mut resp_parts = line.trim().split(consts::STARTLINE_PARTS_SEP);
+            let mut resp_parts = line.trim().split(consts::STARTLINE_PIAR_SEP);
             match resp_parts.next().unwrap() {
                 response_tag::remote::CLIENT_REJECTED => {
                     local_write_half
@@ -192,50 +242,6 @@ async fn handle_file_send(
     Ok(())
 }
 
-async fn try_register_to_remote(
-    name: &str,
-    remote_host: SocketAddr,
-) -> anyhow::Result<Option<SmolStr>> {
-    let remote_stream = TcpStream::connect(remote_host).await?;
-    let (read_half, mut write_half) = remote_stream.into_split();
-    if write_half.writable().await.is_ok() {
-        write_half
-            .write_line(smol_str::format_smolstr!(
-                "{} {}",
-                request_tag::remote::REG_ME,
-                name
-            ))
-            .await?;
-        if read_half.readable().await.is_ok() {
-            let mut reader = BufReader::new(read_half).take(50);
-            let mut line = String::new();
-            if reader.read_line(&mut line).await? != 0 {
-                let remote_resp = line.trim();
-                match remote_resp {
-                    response_tag::common::REG_SUCCEEDED
-                    | response_tag::common::REG_REMOTE_UNSUPPORTED
-                    | response_tag::common::REG_REMOTE_REJECTED => {
-                        return Ok(Some(remote_resp.to_smolstr()))
-                    }
-                    _ => (),
-                }
-            }
-        }
-    }
-    Ok(Some(response_tag::common::REG_REMOTE_FAILED.to_smolstr()))
-}
-
-async fn try_register_to_local(
-    hostname: &str,
-    host_addr: SocketAddr,
-) -> anyhow::Result<Option<SocketAddr>> {
-    let conf_store_lock = global::config_store().await;
-    let mut config_store = conf_store_lock.write().await;
-    let replaced = config_store.register_host(hostname, host_addr);
-    config_store.save_to_file()?;
-    Ok(replaced)
-}
-
 async fn reply_unexpected(
     local_write_half: &mut SendHalf,
     mut write_half: OwnedWriteHalf,
@@ -259,7 +265,7 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
         let mut remote_reader = BufReader::new(remote_read_half).take(10);
         let mut line = String::new();
         if remote_reader.read_line(&mut line).await? != 0 {
-            if let Some((reqeust_tag, arg)) = line.trim().split_once(consts::STARTLINE_PARTS_SEP) {
+            if let Some((reqeust_tag, arg)) = line.trim().split_once(consts::STARTLINE_PIAR_SEP) {
                 match reqeust_tag {
                     request_tag::remote::PORT => {
                         if config_lock.read().await.check_addr_registered(peer_addr) {
@@ -273,7 +279,7 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                                 let mut client_resp = String::new();
                                 if client_reader.read_line(&mut client_resp).await? != 0 {
                                     let mut startline_parts =
-                                        line.trim().split(consts::STARTLINE_PARTS_SEP);
+                                        line.trim().split(consts::STARTLINE_PIAR_SEP);
                                     let response_tag = startline_parts.next().unwrap();
                                     if response_tag == response_tag::client::RECV_REJECTED {
                                         remote_writer
@@ -338,6 +344,12 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                         return Ok(());
                     }
                     request_tag::remote::REG_ME => {
+                        if arg.len() > consts::HOST_NAME_LENGTH_LIMIT {
+                            remote_writer
+                                .write_line(response_tag::common::INVALID_HOSTNAME)
+                                .await?;
+                            return Ok(());
+                        };
                         if let Ok(stream) = try_connect_client().await {
                             let (client_read_half, mut client_write_half) = stream.split();
                             if client_write_half
@@ -385,8 +397,6 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
     Ok(())
 }
 
-
-
 async fn send_files(
     mut local_write_half: SendHalf,
     dest_addr: SocketAddr,
@@ -396,13 +406,17 @@ async fn send_files(
     let (remote_read_half, remote_write_half) = dest_stream.into_split();
     let mut dest_writer = BufWriter::new(remote_write_half);
     let start_flag_with_line =
-        constcat::concat!(request_tag::send_flag::SEND_START, consts::LINE_SEP);
-    dest_writer.write_line(start_flag_with_line).await?;
-    local_write_half.write_line(start_flag_with_line).await?;
+        smol_str::format_smolstr!("{}{}", request_tag::send_flag::SEND_START, consts::LINE_SEP);
+    dest_writer.write_line(&start_flag_with_line).await?;
+    local_write_half.write_line(&start_flag_with_line).await?;
     for p in &files_paths {
         let name_cow = p.file_name().unwrap().to_string_lossy();
         let name = if name_cow.len() >= consts::FILE_NAME_LENGTH_LIMIT {
-            name_cow[0..consts::FILE_NAME_LENGTH_LIMIT].to_smolstr()
+            unsafe {
+                name_cow
+                    .get_unchecked(0..consts::FILE_NAME_LENGTH_LIMIT)
+                    .to_smolstr()
+            }
         } else {
             name_cow.to_smolstr()
         };
@@ -420,7 +434,9 @@ async fn send_files(
                 break;
             }
             size_count += read_size;
-            dest_writer.write_all(&buf[0..read_size]).await?;
+            dest_writer
+                .write_all(unsafe { buf.get_unchecked(0..read_size) })
+                .await?;
             dest_writer.flush().await?;
             local_write_half
                 .write_line(smol_str::format_smolstr!(
@@ -442,7 +458,7 @@ async fn send_files(
     let mut reader = BufReader::new(remote_read_half).take(10);
     let mut line = String::new();
     if reader.read_line(&mut line).await? != 0 {
-        let mut resp_parts = line.split(consts::STARTLINE_PARTS_SEP);
+        let mut resp_parts = line.split(consts::STARTLINE_PIAR_SEP);
         if resp_parts.next().unwrap() == response_tag::remote::FILES_RECEIVED
             && resp_parts.clone().count() == 2
         {
@@ -514,13 +530,13 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
                             .await?;
                         return Ok(());
                     }
-                    let parts: Vec<&str> = trimmed_line.split(consts::PAIR_SEP).collect();
-                    if parts.len() != 2 {
+                    let mut pair = trimmed_line.split(consts::PAIR_SEP);
+                    if pair.clone().count() != 2 {
                         break;
                     }
 
-                    let name = parts[0];
-                    let file_size_res = parts[1].parse::<usize>();
+                    let name = pair.next().unwrap();
+                    let file_size_res = pair.next().unwrap().parse::<usize>();
                     if file_size_res.is_err() {
                         break;
                     }
@@ -534,7 +550,9 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
                         if read_size == 0 {
                             break;
                         }
-                        file_writer.write_all(&buf[0..read_size]).await?;
+                        file_writer
+                            .write_all(unsafe { buf.get_unchecked(0..read_size) })
+                            .await?;
                     }
                     file_writer.flush().await?;
                     files_count += 1;
@@ -578,8 +596,7 @@ async fn create_receive_listener(port: u16) -> Option<tokio::net::TcpListener> {
     None
 }
 
-async fn try_connect_client() -> std::io::Result<interprocess::local_socket::tokio::Stream>
-{
+async fn try_connect_client() -> std::io::Result<interprocess::local_socket::tokio::Stream> {
     interprocess::local_socket::tokio::Stream::connect(
         global::client_ipc_sock_name()
             .to_ns_name::<GenericNamespaced>()

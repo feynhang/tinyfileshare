@@ -214,12 +214,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b6a852b24ab71dffc585bcb46eaf7959d175cb865a7152e35b348d1b2960422"
 
 [[package]]
-name = "constcat"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2e5af989b1955b092db01462980c0a286217f86817e12b2c09aea46bd03651"
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -695,7 +689,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "constcat",
  "ctrlc",
  "dirs",
  "env_logger",

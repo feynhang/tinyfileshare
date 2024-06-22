@@ -2,27 +2,20 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 
-// #[derive(Debug, Clone)]
-// struct Host {
-//     name: String,
-//     address: SocketAddr,
-// }
-
 #[derive(Debug, clap::Subcommand)]
 enum SubCommands {
-    // #[command(override_usage("share.exe reg --name <NAME> --address <ADDRESS>\r\n       share.exe reg <NAME:HOST>"))]
     Reg {
-        #[arg(short('n'), required(true))]
+        #[arg(short('n'), required(true), help("An unique hostname used as ID (at least on this machine).\nAnd its length must be less than 16 byte long"))]
         hostname: String,
-        #[arg(short('a'), required(true))]
-        socketaddr: SocketAddr,
+        #[arg(short('a'), required(true), help("The network address of the host"))]
+        hostaddr: SocketAddr,
     },
 }
 
 #[derive(Debug, Parser)]
 #[command(args_conflicts_with_subcommands(true), subcommand_negates_reqs(true))]
 struct AppArgs {
-    #[arg(short('n'), long, required(true))]
+    #[arg(short('n'), long, required(true), help("A hostname refers to a registered host (a certain network address).\nThe host must been registered on the remote side.\nIMPORTANT: its length limit is 16\n"))]
     hostname: Option<String>,
     #[arg(required(true), value_name("PATH"), num_args(1..=4))]
     files_paths: Vec<PathBuf>,
@@ -32,19 +25,17 @@ struct AppArgs {
 
 fn main() {
     let args = AppArgs::parse();
-    if let Some(hostname) = args.hostname {
-        println!("Hostname is {}", hostname);
+    if let Some(SubCommands::Reg { hostname, hostaddr }) = args.reg_command {
+        println!(
+            "Accept reg_command, hostname = {}, addr = {}",
+            hostname, hostaddr
+        );
+    } else {
+        println!("Accept root command, hostname = {}", args.hostname.unwrap());
 
         for (i, p) in args.files_paths.iter().enumerate() {
-            println!("The {}th path is {}", i, p.to_string_lossy());
+            println!("{}th path = {}", i, p.to_string_lossy());
         }
-    }
-    if let Some(SubCommands::Reg {
-        hostname: name,
-        socketaddr: address,
-    }) = args.reg_command
-    {
-        println!("Accept reg_command, name = {}, addr = {}", name, address);
     }
 }
 

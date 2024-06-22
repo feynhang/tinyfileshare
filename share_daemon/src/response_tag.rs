@@ -5,6 +5,7 @@ pub mod common {
     pub const REG_REMOTE_FAILED: &str = "REG_REMOTE_FAILED";
     pub const REG_REMOTE_UNSUPPORTED: &str = "REG_REMOTE_UNSUPPORTED";
     pub const REG_REMOTE_REJECTED: &str = "REG_REMOTE_REJECTED";
+    pub const INVALID_HOSTNAME: &str = "INVALID_HOSTNAME";
 }
 
 pub mod remote {
