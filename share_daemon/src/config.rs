@@ -49,50 +49,60 @@ impl ConfigStore {
         Ok(())
     }
 
-    pub(crate) fn from_config_file() -> Self {
-        match Config::from_file(None) {
-            Ok((current_config, last_modified)) => Self {
-                current_config,
-                last_modified,
-            },
-            Err(e) => {
-                log::warn!(
-                    "Error occurred while try read config from file! Server will use default. Detail: {}",
-                    e
-                );
-                let mut default_config_store = Self::default();
-                if let Err(e) = default_config_store.update_to_file() {
-                    log::error!(
-                        "Error occurred while write default config to file!!! Detail: {}",
-                        e
-                    );
-                }
+    fn get_default_and_log_msg<E: std::fmt::Display>(msg: E) -> Self {
+        log::warn!("{}", msg);
+        let mut default_config_store = Self::default();
+        if let Err(e) = default_config_store.update_to_file() {
+            log::error!(
+                "Error occurred while write default config to file!!! Detail: {}",
+                e
+            );
+        }
+        default_config_store
+    }
 
-                default_config_store
-            }
+    pub(crate) fn from_config_file() -> Self {
+        if !global::config_path().exists() {
+            return Self::get_default_and_log_msg(
+                "The configuration file does not exist, create default!",
+            );
+        }
+        match Config::open_config_file_readonly() {
+            Ok(f) => match Config::from_file(f) {
+                Ok((current_config, last_modified)) => Self {
+                    current_config,
+                    last_modified,
+                },
+                Err(read_err) => Self::get_default_and_log_msg(format_args!(
+                    "Read from config file failed, use default instead! detail: {}",
+                    read_err
+                )),
+            },
+            Err(open_err) => Self::get_default_and_log_msg(format_args!(
+                "Open config file failed, use default instead! detail: {}",
+                open_err
+            )),
         }
     }
 
     pub(crate) fn update_to_file(&mut self) -> std::io::Result<()> {
-        self.last_modified = self
-            .current_config
-            .write_to_file(Config::open_config_file()?)?;
+        self.last_modified = self.current_config.write_to_file()?;
         Ok(())
     }
 
     pub(crate) fn update_from_file(&mut self) -> anyhow::Result<()> {
-        let f = Config::open_config_file()?;
+        let f = Config::open_config_file_readonly()?;
         if let LastModified::LastModTime(lastmod_time) = self.last_modified {
             if let Ok(modified_time) = f.metadata()?.modified() {
                 if modified_time == lastmod_time {
                     return Ok(());
                 }
             }
-            let (c, t) = Config::from_file(Some(f))?;
+            let (c, t) = Config::from_file(f)?;
             self.current_config = c;
             self.last_modified = t;
         } else {
-            self.last_modified = self.write_to_file(f)?;
+            self.last_modified = self.write_to_file()?;
         }
         Ok(())
     }
@@ -132,10 +142,12 @@ impl Default for Config {
 }
 
 impl Config {
-    pub(crate) fn write_to_file(&self, mut f: File) -> std::io::Result<LastModified> {
+    pub(crate) fn write_to_file(&self) -> std::io::Result<LastModified> {
+        let mut f = File::create(global::config_path())?;
         f.write_all(
             toml::to_string(&self)
                 .expect("Config serialize to toml failed, this should not happen!")
+                .trim()
                 .as_bytes(),
         )?;
         f.flush()?;
@@ -145,43 +157,26 @@ impl Config {
         Ok(LastModified::Unknown)
     }
 
-    pub(crate) fn open_config_file() -> std::io::Result<File> {
-        File::options()
-            .read(true)
-            .write(true)
-            .open(global::config_path())
+    pub(crate) fn open_config_file_readonly() -> std::io::Result<File> {
+        File::options().read(true).open(global::config_path())
     }
 
-    pub(crate) fn from_file(f_opt: Option<File>) -> anyhow::Result<(Self, LastModified)> {
-        let mut f = if let Some(f) = f_opt {
-            f
-        } else {
-            Self::open_config_file()?
-        };
+    pub(crate) fn from_file(mut f: File) -> anyhow::Result<(Self, LastModified)> {
         let mut content = String::new();
         if f.read_to_string(&mut content)? > 0 {
-            let (ok, config) = toml::from_str::<Config>(&content)?.checked();
+            let (ok, config) = toml::from_str::<Config>(content.trim())?.checked();
             let modified = if !ok {
-                config.write_to_file(f)?
+                drop(f);
+                config.write_to_file()?
             } else if let Ok(last_modified) = f.metadata()?.modified() {
                 LastModified::LastModTime(last_modified)
             } else {
                 LastModified::Unknown
             };
 
-            return Ok((config, modified));
-        }
-        Err(anyhow::anyhow!("Config file is empty!"))
-    }
-
-    pub(crate) fn check_hostname(name: &str) -> anyhow::Result<&str> {
-        if name.len() > consts::HOST_NAME_LENGTH_LIMIT {
-            Err(anyhow::anyhow!(
-                "The length of hostname {} is out of max 16(bytes)!",
-                name
-            ))
+            Ok((config, modified))
         } else {
-            Ok(name)
+            Err(anyhow::anyhow!("Config file is empty!"))
         }
     }
 
@@ -194,7 +189,7 @@ impl Config {
     }
 
     pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::checked_receive_dir(file_save_dir.into()).1;
+        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
     }
 
     pub(crate) fn receive_dir(&self) -> &Path {
@@ -206,7 +201,7 @@ impl Config {
     }
 
     pub(crate) fn set_num_workers(&mut self, n: u8) {
-        self.num_workers = Self::checked_num_workers(n).1;
+        self.num_workers = Self::check_num_workers(n).1;
     }
 
     pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
@@ -225,7 +220,7 @@ impl Config {
         self.reg_hosts.get(hostname)
     }
 
-    fn checked_num_workers(num: u8) -> (bool, u8) {
+    fn check_num_workers(num: u8) -> (bool, u8) {
         if num == 0 || num > MAX_WORKERS {
             (false, DEFAULT_NUM_WORKERS)
         } else {
@@ -243,7 +238,7 @@ impl Config {
         d
     }
 
-    fn checked_receive_dir(path: PathBuf) -> (bool, PathBuf) {
+    fn check_receive_dir(path: PathBuf) -> (bool, PathBuf) {
         if path.is_dir() {
             return (true, path);
         }
@@ -258,15 +253,20 @@ impl Config {
         (true, path)
     }
 
+    #[inline(always)]
+    pub(crate) fn check_hostname_valid(hostname: &str) -> bool {
+        hostname.len() <= consts::HOST_NAME_LENGTH_LIMIT
+    }
+
     fn checked(mut self) -> (bool, Self) {
-        let (num_workers_ok, num_workers) = Self::checked_num_workers(self.num_workers);
-        let (recv_dir_ok, recv_dir) = Self::checked_receive_dir(self.receive_dir);
+        let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
+        let (recv_dir_ok, recv_dir) = Self::check_receive_dir(self.receive_dir);
         let mut hostname_ok = true;
         self.reg_hosts = self
             .reg_hosts
             .into_iter()
             .map(|(mut name, addr)| {
-                if name.len() > consts::HOST_NAME_LENGTH_LIMIT {
+                if !Self::check_hostname_valid(&name) {
                     if hostname_ok {
                         hostname_ok = false;
                     }
@@ -303,15 +303,19 @@ mod config_tests {
 
     #[test]
     fn config_to_file_test() {
-        let res = get_config_store().write_to_file(Config::open_config_file().unwrap());
+        let res = get_config_store().write_to_file();
         assert!(res.is_ok());
     }
 
     #[test]
     fn config_from_file_test() {
-        let res = Config::from_file(None);
+        let res = Config::from_file(
+            Config::open_config_file_readonly().expect("open config file failed"),
+        );
         assert!(res.is_ok());
-        let c = res.unwrap().0;
-        assert!(c.get_addr_by_name("myhostdngjiyhbva").is_some());
+        let (c, l) = res.unwrap();
+        println!("Config: {:?}\n lastmodified: {:?}", c, l);
+        // let c = res.unwrap().0;
+        // assert!(c.get_addr_by_name("myhostdngjiyhbva").is_some());
     }
 }

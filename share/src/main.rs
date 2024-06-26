@@ -1,42 +1,89 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, ops::Deref, path::PathBuf};
 
-use clap::Parser;
+use clap::{value_parser, Arg, ArgAction, Command};
+use smol_str::SmolStr;
 
-#[derive(Debug, clap::Subcommand)]
-enum SubCommands {
-    Reg {
-        #[arg(short('n'), required(true), help("An unique hostname used as ID (at least on this machine).\nAnd its length must be less than 16 byte long"))]
-        hostname: String,
-        #[arg(short('a'), required(true), help("The network address of the host"))]
-        hostaddr: SocketAddr,
-    },
+#[derive(Debug, Clone)]
+struct Hostname(SmolStr);
+
+impl Deref for Hostname {
+    type Target = SmolStr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-#[derive(Debug, Parser)]
-#[command(args_conflicts_with_subcommands(true), subcommand_negates_reqs(true))]
-struct AppArgs {
-    #[arg(short('n'), long, required(true), help("A hostname refers to a registered host (a certain network address).\nThe host must been registered on the remote side.\nIMPORTANT: its length limit is 16\n"))]
-    hostname: Option<String>,
-    #[arg(required(true), value_name("PATH"), num_args(1..=4))]
-    files_paths: Vec<PathBuf>,
-    #[command(subcommand)]
-    reg_command: Option<SubCommands>,
+impl std::fmt::Display for Hostname {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for Hostname {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() > fshare_server::consts::FILE_NAME_LENGTH_LIMIT {
+            return Err(anyhow::anyhow!(
+                "The length of the host name must be within {}!",
+                fshare_server::consts::FILE_NAME_LENGTH_LIMIT
+            ));
+        }
+        Ok(Self(s.into()))
+    }
+}
+
+mod id {
+    pub const HOSTNAME: &str = "hostname";
+    pub const PATH: &str = "PATH";
+    pub const ADDRESS: &str = "address";
+    pub const LOCAL_ONLY: &str = "local_only";
 }
 
 fn main() {
-    let args = AppArgs::parse();
-    if let Some(SubCommands::Reg { hostname, hostaddr }) = args.reg_command {
-        println!(
-            "Accept reg_command, hostname = {}, addr = {}",
-            hostname, hostaddr
-        );
-    } else {
-        println!("Accept root command, hostname = {}", args.hostname.unwrap());
-
-        for (i, p) in args.files_paths.iter().enumerate() {
-            println!("{}th path = {}", i, p.to_string_lossy());
+    let matches = Command::new(env!("CARGO_CRATE_NAME"))
+        .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("A hostname refers to a registered host (a network address), \nthe host should been registered on the remote side. \nThose hosts already registered could be found in the config file, \nand default config path is <bold>$HOME/.tinyfileshare/.config.toml</bold>")))
+        .arg(
+            Arg::new("PATH")
+                .num_args(1..=4)
+                .required(true)
+                .value_parser(value_parser!(PathBuf))
+                .action(ArgAction::Append).help("The paths of the files shared to the remote host (with the given hostname). \nThe number range of paths is 1..=4."),
+        )
+        .subcommand(
+            Command::new("reg").short_flag('r')
+                .about("Register a host with hostname")
+                .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("An unique hostname used as ID(at least on this machine) for the host. \nNote: <bold>Its length must be less than 20 bytes</bold>")))
+                .arg(Arg::new(id::ADDRESS).short('a').long(id::ADDRESS).required(true).value_parser(value_parser!(SocketAddr)).help("The network address within port of the host. Such as 192.168.1.2:20"))
+                .arg(Arg::new(id::LOCAL_ONLY).short('l').long("local").action(ArgAction::SetTrue).value_parser(value_parser!(bool)).help("Register the given to local only. \nWhich actually means writing hostname and address to local configuration file only.")),
+        ).args_conflicts_with_subcommands(true).get_matches();
+    match matches.subcommand() {
+        Some((_, sub_matches)) => {
+            let hostname = sub_matches.get_one::<Hostname>(id::HOSTNAME).unwrap();
+            let address = sub_matches.get_one::<SocketAddr>(id::ADDRESS).unwrap();
+            let local_only = sub_matches.get_flag(id::LOCAL_ONLY);
+            println!("hostname = {}, address = {}, local_only = {}", hostname, address, local_only);
+        }
+        None => {
+            let hostname = matches.get_one::<Hostname>(id::HOSTNAME).unwrap();
+            println!("No subcommand, hostname = {}", hostname);
+            for (idx, p) in matches.get_many::<PathBuf>(id::PATH).unwrap().enumerate() {
+                println!("The {}th path: {}", idx, p.to_string_lossy());
+            }
         }
     }
+
+}
+
+// fn connect_daemon() -> anyhow::Result<>
+
+fn share_files() -> anyhow::Result<()> {
+    todo!()
+}
+
+fn reg_host(local: bool) -> anyhow::Result<()> {
+    todo!()
 }
 
 #[cfg(test)]
@@ -45,7 +92,8 @@ mod tests {
 
     #[test]
     fn print_cargo_pkg_name() {
-        println!(std::env!("CARGO_PKG_NAME"))
+        println!("CARGO_PKG_NAME = {}", env!("CARGO_PKG_NAME"));
+        println!("CARGO_CRATE_NMAE = {}", env!("CARGO_CRATE_NAME"));
     }
 
     #[test]

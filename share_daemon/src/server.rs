@@ -30,10 +30,10 @@ pub(crate) fn init_global_logger(
 pub struct Server {
     server_ipc_sock_name: SmolStr,
     client_ipc_sock_name: SmolStr,
-    log_target: Option<env_logger::Target>,
+    log_target: env_logger::Target,
     max_log_level: log::LevelFilter,
     config: Config,
-    use_config_file: bool,
+    from_config_file: bool,
 }
 
 impl Default for Server {
@@ -42,16 +42,14 @@ impl Default for Server {
             server_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCK_NAME),
             client_ipc_sock_name: SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME),
             max_log_level: log::LevelFilter::Info,
-            log_target: None,
+            log_target: env_logger::Target::Stdout,
             config: Config::default(),
-            use_config_file: false,
+            from_config_file: false,
         }
     }
 }
 
 impl Server {
-
-
     pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
         self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
         self
@@ -80,16 +78,16 @@ impl Server {
     }
 
     pub fn log_target(&mut self, target: env_logger::Target) -> &mut Self {
-        self.log_target = Some(target);
+        self.log_target = target;
         self
     }
 
-    pub fn use_config_file<P: Into<std::path::PathBuf>>(
+    pub fn set_config_file<P: Into<std::path::PathBuf>>(
         &mut self,
         config_file_path: P,
     ) -> anyhow::Result<&mut Self> {
         global::set_config_path(config_file_path.into())?;
-        self.use_config_file = true;
+        self.from_config_file = true;
         Ok(self)
     }
 
@@ -103,9 +101,19 @@ impl Server {
         self
     }
 
-    pub fn add_host_to_local(&mut self, hostname: &str, host: SocketAddr) -> anyhow::Result<&mut Self> {
-        self.config.register_host(Config::check_hostname(hostname)?, host);
-        Ok(self)
+    pub fn add_host_to_local(
+        &mut self,
+        hostname: &str,
+        host: SocketAddr,
+    ) -> anyhow::Result<&mut Self> {
+        if Config::check_hostname_valid(hostname) {
+            self.config.register_host(hostname, host);
+            return Ok(self);
+        }
+        Err(anyhow::anyhow!(
+            "The length of hostname {} is out of max 16(bytes)!",
+            hostname
+        ))
     }
 
     pub fn start(self) -> anyhow::Result<()> {
@@ -144,6 +152,7 @@ impl Server {
             listener_res = Self::try_create_default_ipc_server();
         }
         if let Ok(local_listener) = listener_res {
+            log::info!("Local process listener start finished!");
             loop {
                 let conn = match local_listener.accept().await {
                     Ok(c) => c,
@@ -174,15 +183,9 @@ impl Server {
     }
 
     async fn start_inner(mut self) -> anyhow::Result<()> {
-        init_global_logger(
-            if let Some(t) = self.log_target {
-                t
-            } else {
-                env_logger::Target::Stdout
-            },
-            self.max_log_level,
-        )?;
-        if self.use_config_file {
+        init_global_logger(self.log_target, self.max_log_level)?;
+
+        if self.from_config_file {
             self.config = global::config_store().await.read().await.clone_inner();
         }
         let remote_listener;

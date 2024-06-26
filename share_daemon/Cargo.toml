@@ -13,16 +13,15 @@ name = "share_daemon"
 path = "src/main.rs"
 
 
-
 [dependencies]
-serde = { version = "*", features = ["derive"]}
-toml = "*"
-chrono = "*"
-tokio = { version = "*", features = ["full"] }
-interprocess = {version = "*", features = ["tokio"]}
+dirs = "*"
 ctrlc = "*"
 log = "*"
-anyhow = "*"
-dirs = "*"
 env_logger = "*"
-smol_str = {version = "*", features = ["default", "serde"]}
+toml = "*"
+clap = { workspace = true }
+serde = { version = "*", features = ["derive"] }
+tokio = { version = "*", features = ["full"] }
+interprocess = { workspace = true }
+anyhow = { workspace = true }
+smol_str = { workspace = true, features = ["default", "serde"] }

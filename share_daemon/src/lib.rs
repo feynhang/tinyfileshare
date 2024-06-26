@@ -1,3 +1,4 @@
+
 pub mod config;
 pub mod request_tag;
 pub mod response_tag;
@@ -7,7 +8,7 @@ pub(crate) mod handler;
 
 pub mod consts {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    pub const HOST_NAME_LENGTH_LIMIT: usize = 16;
+    pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
     pub const STARTLINE_PIAR_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
     pub const DEFAULT_LISTENER_PORT: u16 = 10020;
@@ -43,7 +44,6 @@ pub mod consts {
 }
 
 mod global {
-    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
@@ -62,7 +62,10 @@ mod global {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
                     if let Err(e) = config_store.update_from_file() {
-                        log::error!("Update config in config_store failed and ignored it! Detail: {}", e);
+                        log::error!(
+                            "Update config in config_store failed and ignored it! Detail: {}",
+                            e
+                        );
                     }
                     conf_store_lock
                 }
@@ -100,45 +103,11 @@ mod global {
 
     pub(crate) fn set_config_path(path: PathBuf) -> anyhow::Result<()> {
         unsafe {
-            CONFIG_PATH = Some(check_path(path)?);
+            CONFIG_PATH = Some(path);
         }
         Ok(())
     }
 
-    fn check_path(mut path_for_check: PathBuf) -> anyhow::Result<PathBuf> {
-        if path_for_check.is_symlink() {
-            return Err(anyhow::Error::msg(
-                "Symbolic link for config path is not supported!",
-            ));
-        }
-
-        if path_for_check.is_file() || path_for_check == default_config_path() {
-            return Ok(path_for_check);
-        }
-
-        fn try_create_dir(dir_path: &Path) -> anyhow::Result<()> {
-            if !dir_path.exists() && std::fs::create_dir_all(dir_path).is_err() {
-                return Err(anyhow::Error::msg(smol_str::format_smolstr!(
-                    "Create dir failed: {}, please check it validity!",
-                    dir_path.to_string_lossy()
-                )));
-            }
-            Ok(())
-        }
-
-        if let Some(ext_name) = path_for_check.extension() {
-            if ext_name == OsStr::new("toml") {
-                path_for_check.pop();
-                try_create_dir(&path_for_check)?;
-                return Ok(path_for_check);
-            }
-        }
-        if !path_for_check.is_dir() {
-            try_create_dir(&path_for_check)?;
-        }
-        path_for_check.push(consts::DEFAULT_CONFIG_FILE_NAME);
-        Ok(path_for_check)
-    }
 
     pub(crate) fn config_path() -> &'static Path {
         unsafe { CONFIG_PATH.get_or_insert(default_config_path().to_path_buf()) }

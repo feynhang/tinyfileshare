@@ -32,7 +32,7 @@ where
     }
 }
 
-use crate::{consts, global, request_tag, response_tag};
+use crate::{config::Config, consts, global, request_tag, response_tag};
 
 pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
     let (local_read_half, mut local_write_half) = stream.split();
@@ -80,7 +80,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                 }
                 request_tag::local::REG => {
                     if let Some((hostname, addr_str)) = arg.trim().split_once(consts::PAIR_SEP) {
-                        if hostname.len() > consts::HOST_NAME_LENGTH_LIMIT {
+                        if !Config::check_hostname_valid(hostname) {
                             local_write_half.write_line(response_tag::common::INVALID_HOSTNAME).await?;
                             return Ok(());
                         }
@@ -344,7 +344,7 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                         return Ok(());
                     }
                     request_tag::remote::REG_ME => {
-                        if arg.len() > consts::HOST_NAME_LENGTH_LIMIT {
+                        if !Config::check_hostname_valid(arg) {
                             remote_writer
                                 .write_line(response_tag::common::INVALID_HOSTNAME)
                                 .await?;

@@ -5,5 +5,8 @@ edition = "2021"
 
 [dependencies]
 share_daemon = { path = "../share_daemon" }
-clap = {version = "*", features = ["default", "derive"]}
-anyhow= "*"
+color-print = "*"
+clap = { workspace = true }
+anyhow = { workspace = true }
+smol_str = { workspace = true }
+interprocess = { workspace = true }

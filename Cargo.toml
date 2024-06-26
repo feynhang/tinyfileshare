@@ -1,3 +1,9 @@
 [workspace]
-members = ["share", "share_daemon", "termrender"]
+members = ["share", "share_daemon"]
 resolver = "2"
+
+[workspace.dependencies]
+interprocess = {version = "*", features = ["tokio"]}
+smol_str = "*"
+anyhow = "*"
+clap = "*"
