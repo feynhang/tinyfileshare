@@ -25,3 +25,4 @@ tokio = { version = "*", features = ["full"] }
 interprocess = { workspace = true }
 anyhow = { workspace = true }
 smol_str = { workspace = true, features = ["default", "serde"] }
+faccess = "*"

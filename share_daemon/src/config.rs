@@ -11,7 +11,7 @@ use std::{
 
 use smol_str::SmolStr;
 
-use crate::{consts, global};
+use crate::consts;
 
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
 pub(crate) const MAX_WORKERS: u8 = 120;
@@ -19,6 +19,7 @@ pub(crate) const MAX_WORKERS: u8 = 120;
 #[derive(Debug)]
 pub(crate) struct ConfigStore {
     current_config: Config,
+    config_path: PathBuf,
     last_modified: LastModified,
 }
 
@@ -32,80 +33,53 @@ impl ConfigStore {
     pub(crate) fn default() -> Self {
         Self {
             current_config: Config::default(),
+            config_path: Self::default_config_path(),
             last_modified: LastModified::Unknown,
         }
     }
 
-    pub(crate) fn clone_inner(&self) -> Config {
-        self.current_config.clone()
+    pub(crate) fn set_config_path(&mut self, path: PathBuf) {
+        self.config_path = path
+    }
+    
+    pub(crate) fn default_config_path() -> PathBuf {
+        let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
+        path.push(consts::DEFAULT_CONFIG_DIR_NAME);
+        if !path.exists() {
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        path.push(consts::DEFAULT_CONFIG_FILE_NAME);
+        path
     }
 
     pub(crate) fn set_config(&mut self, config: Config) -> anyhow::Result<()> {
-        let (ok, c) = config.checked();
-        if !ok {
-            self.update_to_file()?;
-        }
-        self.current_config = c;
+        self.current_config = config.checked().1;
         Ok(())
     }
 
-    fn get_default_and_log_msg<E: std::fmt::Display>(msg: E) -> Self {
-        log::warn!("{}", msg);
-        let mut default_config_store = Self::default();
-        if let Err(e) = default_config_store.update_to_file() {
-            log::error!(
-                "Error occurred while write default config to file!!! Detail: {}",
-                e
-            );
-        }
-        default_config_store
-    }
-
-    pub(crate) fn from_config_file() -> Self {
-        if !global::config_path().exists() {
-            return Self::get_default_and_log_msg(
-                "The configuration file does not exist, create default!",
-            );
-        }
-        match Config::open_config_file_readonly() {
-            Ok(f) => match Config::from_file(f) {
-                Ok((current_config, last_modified)) => Self {
-                    current_config,
-                    last_modified,
-                },
-                Err(read_err) => Self::get_default_and_log_msg(format_args!(
-                    "Read from config file failed, use default instead! detail: {}",
-                    read_err
-                )),
-            },
-            Err(open_err) => Self::get_default_and_log_msg(format_args!(
-                "Open config file failed, use default instead! detail: {}",
-                open_err
-            )),
-        }
-    }
-
-    pub(crate) fn update_to_file(&mut self) -> std::io::Result<()> {
-        self.last_modified = self.current_config.write_to_file()?;
+    pub(crate) fn update_to_file(&mut self) -> anyhow::Result<()> {
+        self.last_modified = self.write_to_file(&self.config_path)?;
         Ok(())
     }
 
-    pub(crate) fn update_from_file(&mut self) -> anyhow::Result<()> {
-        let f = Config::open_config_file_readonly()?;
+    pub(crate) fn try_update_from_file(&mut self) -> anyhow::Result<()> {
+        let f = Config::open_config_file_readonly(&self.config_path)?;
         if let LastModified::LastModTime(lastmod_time) = self.last_modified {
             if let Ok(modified_time) = f.metadata()?.modified() {
                 if modified_time == lastmod_time {
                     return Ok(());
                 }
             }
-            let (c, t) = Config::from_file(f)?;
+            let (c, t) = Config::from_file(&self.config_path)?;
             self.current_config = c;
             self.last_modified = t;
         } else {
-            self.last_modified = self.write_to_file()?;
+            self.last_modified = self.write_to_file(&self.config_path)?;
         }
         Ok(())
     }
+
+
 }
 
 impl Deref for ConfigStore {
@@ -142,14 +116,10 @@ impl Default for Config {
 }
 
 impl Config {
-    pub(crate) fn write_to_file(&self) -> std::io::Result<LastModified> {
-        let mut f = File::create(global::config_path())?;
-        f.write_all(
-            toml::to_string(&self)
-                .expect("Config serialize to toml failed, this should not happen!")
-                .trim()
-                .as_bytes(),
-        )?;
+
+    pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
+        let mut f = File::create(p)?;
+        f.write_all(toml::to_string(&self)?.as_bytes())?;
         f.flush()?;
         if let Ok(last_modified) = f.metadata()?.modified() {
             return Ok(LastModified::LastModTime(last_modified));
@@ -157,17 +127,18 @@ impl Config {
         Ok(LastModified::Unknown)
     }
 
-    pub(crate) fn open_config_file_readonly() -> std::io::Result<File> {
-        File::options().read(true).open(global::config_path())
+    pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
+        File::open(config_path)
     }
+    
 
-    pub(crate) fn from_file(mut f: File) -> anyhow::Result<(Self, LastModified)> {
+    pub(crate) fn from_file<P: AsRef<Path>>(p: P) -> anyhow::Result<(Self, LastModified)> {
+        let mut f = File::open(p.as_ref())?;
         let mut content = String::new();
         if f.read_to_string(&mut content)? > 0 {
             let (ok, config) = toml::from_str::<Config>(content.trim())?.checked();
             let modified = if !ok {
-                drop(f);
-                config.write_to_file()?
+                config.write_to_file(p.as_ref())?
             } else if let Ok(last_modified) = f.metadata()?.modified() {
                 LastModified::LastModTime(last_modified)
             } else {
@@ -303,14 +274,14 @@ mod config_tests {
 
     #[test]
     fn config_to_file_test() {
-        let res = get_config_store().write_to_file();
+        let res = get_config_store().write_to_file(&ConfigStore::default_config_path());
         assert!(res.is_ok());
     }
 
     #[test]
     fn config_from_file_test() {
         let res = Config::from_file(
-            Config::open_config_file_readonly().expect("open config file failed"),
+            ConfigStore::default_config_path(),
         );
         assert!(res.is_ok());
         let (c, l) = res.unwrap();

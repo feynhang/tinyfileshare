@@ -24,9 +24,9 @@ impl std::str::FromStr for Hostname {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() > fshare_server::consts::FILE_NAME_LENGTH_LIMIT {
+        if s.is_empty() || s.len() > fshare_server::consts::FILE_NAME_LENGTH_LIMIT {
             return Err(anyhow::anyhow!(
-                "The length of the host name must be within {}!",
+                "The length of the host name must be in range  1..={}!",
                 fshare_server::consts::FILE_NAME_LENGTH_LIMIT
             ));
         }
@@ -43,7 +43,7 @@ mod id {
 
 fn main() {
     let matches = Command::new(env!("CARGO_CRATE_NAME"))
-        .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("A hostname refers to a registered host (a network address), \nthe host should been registered on the remote side. \nThose hosts already registered could be found in the config file, \nand default config path is <bold>$HOME/.tinyfileshare/.config.toml</bold>")))
+        .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("A hostname refers to a registered host (a network address), \nthe host should been registered on the remote side. \nThose hosts already registered could be found in a config file.\n Default config path is <bold>$HOME/.tinyfileshare/.config.toml</bold>.\n<bold>NOTE: It can not be empty, its length can not be out of 20 bytes</bold>")))
         .arg(
             Arg::new("PATH")
                 .num_args(1..=4)
@@ -54,7 +54,7 @@ fn main() {
         .subcommand(
             Command::new("reg").short_flag('r')
                 .about("Register a host with hostname")
-                .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("An unique hostname used as ID(at least on this machine) for the host. \nNote: <bold>Its length must be less than 20 bytes</bold>")))
+                .arg(Arg::new(id::HOSTNAME).short('n').long(id::HOSTNAME).required(true).value_parser(value_parser!(Hostname)).help(color_print::cstr!("An unique hostname used as ID(at least on this machine) for the host. \n<bold>NOTE: It can not be empty, its length can not be out of 20 bytes</bold>")))
                 .arg(Arg::new(id::ADDRESS).short('a').long(id::ADDRESS).required(true).value_parser(value_parser!(SocketAddr)).help("The network address within port of the host. Such as 192.168.1.2:20"))
                 .arg(Arg::new(id::LOCAL_ONLY).short('l').long("local").action(ArgAction::SetTrue).value_parser(value_parser!(bool)).help("Register the given to local only. \nWhich actually means writing hostname and address to local configuration file only.")),
         ).args_conflicts_with_subcommands(true).get_matches();

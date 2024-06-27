@@ -33,7 +33,7 @@ pub struct Server {
     log_target: env_logger::Target,
     max_log_level: log::LevelFilter,
     config: Config,
-    from_config_file: bool,
+    config_path: Option<PathBuf>,
 }
 
 impl Default for Server {
@@ -44,17 +44,12 @@ impl Default for Server {
             max_log_level: log::LevelFilter::Info,
             log_target: env_logger::Target::Stdout,
             config: Config::default(),
-            from_config_file: false,
+            config_path: None,
         }
     }
 }
 
 impl Server {
-    pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
-        self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
-        self
-    }
-
     fn checked_ipc_socket_name(name: &str) -> SmolStr {
         if name.to_ns_name::<GenericNamespaced>().is_ok() {
             return name.to_smolstr();
@@ -62,6 +57,12 @@ impl Server {
         consts::DEFAULT_CLIENT_IPC_SOCK_NAME.to_smolstr()
     }
 
+    pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
+        self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
+        self
+    }
+
+  
     pub fn client_ipc_socket_name(&mut self, client_ipc_sock_name: &str) -> &mut Self {
         self.client_ipc_sock_name = Self::checked_ipc_socket_name(client_ipc_sock_name);
         self
@@ -82,12 +83,11 @@ impl Server {
         self
     }
 
-    pub fn set_config_file<P: Into<std::path::PathBuf>>(
+    pub fn load_config_file(
         &mut self,
-        config_file_path: P,
+        config_file_path: PathBuf,
     ) -> anyhow::Result<&mut Self> {
-        global::set_config_path(config_file_path.into())?;
-        self.from_config_file = true;
+        self.config_path = Some(config_file_path);
         Ok(self)
     }
 
@@ -181,14 +181,13 @@ impl Server {
             std::process::exit(1);
         }
     }
+    
 
-    async fn start_inner(mut self) -> anyhow::Result<()> {
+    #[allow(unused_variables)]
+    async fn start_inner(self) -> anyhow::Result<()> {
+
         init_global_logger(self.log_target, self.max_log_level)?;
-
-        if self.from_config_file {
-            self.config = global::config_store().await.read().await.clone_inner();
-        }
-        let remote_listener;
+        let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
         if let Err(e) = listen_res {
             if self.config.listener_addr == consts::DEFAULT_LISTENER_ADDR {
@@ -200,11 +199,17 @@ impl Server {
         }
         let local_addr = remote_listener.local_addr().unwrap();
         log::info!("Server start at {}\n", local_addr);
-        self.config.set_listener_addr(local_addr);
+        
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
-        config_store.set_config(self.config)?;
-        config_store.update_to_file()?;
+        config_store.set_listener_addr(local_addr);
+        if let Some(config_path) =self.config_path {
+            config_store.set_config_path(config_path);
+            config_store.try_update_from_file()?;
+        } else {
+            config_store.set_config(self.config)?;
+            config_store.update_to_file()?;
+        } 
         ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);

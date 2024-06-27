@@ -1,4 +1,3 @@
-
 pub mod config;
 pub mod request_tag;
 pub mod response_tag;
@@ -44,7 +43,6 @@ pub mod consts {
 }
 
 mod global {
-    use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
     use smol_str::SmolStr;
@@ -53,15 +51,13 @@ mod global {
     use crate::config::ConfigStore;
     use crate::consts;
 
-    static mut CONFIG_PATH: Option<PathBuf> = None;
-
     pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
         static mut CONFIG: OnceLock<RwLock<ConfigStore>> = OnceLock::new();
         unsafe {
             match CONFIG.get_mut() {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
-                    if let Err(e) = config_store.update_from_file() {
+                    if let Err(e) = config_store.try_update_from_file() {
                         log::error!(
                             "Update config in config_store failed and ignored it! Detail: {}",
                             e
@@ -70,8 +66,7 @@ mod global {
                     conf_store_lock
                 }
                 None => {
-                    let c = ConfigStore::from_config_file();
-                    CONFIG.get_or_init(|| RwLock::new(c))
+                    CONFIG.get_or_init(|| RwLock::new(ConfigStore::default()))
                 }
             }
         }
@@ -79,6 +74,7 @@ mod global {
 
     static mut IPC_SVR_SOCK_NAME: SmolStr =
         SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCK_NAME);
+
     static mut IPC_CLT_SOCK_NAME: SmolStr =
         SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME);
     pub(crate) fn server_ipc_sock_name() -> &'static str {
@@ -89,42 +85,15 @@ mod global {
         unsafe { IPC_CLT_SOCK_NAME.as_str() }
     }
 
-    pub(crate) fn set_server_ipc_sock_name(name: SmolStr) {
+    pub(crate) fn set_server_ipc_sock_name(server_socket_name: SmolStr) {
         unsafe {
-            IPC_SVR_SOCK_NAME = name;
+            IPC_SVR_SOCK_NAME = server_socket_name;
         }
     }
 
-    pub(crate) fn set_client_ipc_sock_name(name: SmolStr) {
+    pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
         unsafe {
-            IPC_CLT_SOCK_NAME = name;
-        }
-    }
-
-    pub(crate) fn set_config_path(path: PathBuf) -> anyhow::Result<()> {
-        unsafe {
-            CONFIG_PATH = Some(path);
-        }
-        Ok(())
-    }
-
-
-    pub(crate) fn config_path() -> &'static Path {
-        unsafe { CONFIG_PATH.get_or_insert(default_config_path().to_path_buf()) }
-    }
-
-    pub(crate) fn default_config_path() -> &'static Path {
-        static mut DEFAULT_CONFIG_PATH: OnceLock<PathBuf> = OnceLock::new();
-        unsafe {
-            DEFAULT_CONFIG_PATH.get_or_init(|| {
-                let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
-                path.push(consts::DEFAULT_CONFIG_DIR_NAME);
-                if !path.exists() {
-                    std::fs::create_dir_all(&path).unwrap();
-                }
-                path.push(consts::DEFAULT_CONFIG_FILE_NAME);
-                path
-            })
+            IPC_CLT_SOCK_NAME = client_socket_name;
         }
     }
 }
