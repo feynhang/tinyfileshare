@@ -77,7 +77,6 @@ impl Server {
         self
     }
 
-  
     pub fn client_ipc_socket_name(&mut self, client_ipc_sock_name: &str) -> &mut Self {
         self.client_ipc_sock_name = Self::checked_ipc_socket_name(client_ipc_sock_name);
         self
@@ -98,6 +97,7 @@ impl Server {
     }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     pub fn set_ipc_socket_name(&mut self, ipc_socket_name: SmolStr) {
         self.config.set_ipc_socket_name(ipc_socket_name);
 =======
@@ -105,6 +105,9 @@ impl Server {
         &mut self,
         config_file_path: PathBuf,
     ) -> anyhow::Result<&mut Self> {
+=======
+    pub fn load_config_file(&mut self, config_file_path: PathBuf) -> anyhow::Result<&mut Self> {
+>>>>>>> 83192c9 (	modified:   share/src/main.rs)
         self.config_path = Some(config_file_path);
         Ok(self)
 >>>>>>> c22d847 (	modified:   Cargo.lock)
@@ -217,10 +220,10 @@ impl Server {
             std::process::exit(1);
         }
     }
-    
 
     #[allow(unused_variables)]
     async fn start_inner(self) -> anyhow::Result<()> {
+<<<<<<< HEAD
 
 <<<<<<< HEAD
     async fn start_inner(self) -> anyhow::Result<()> {
@@ -231,7 +234,10 @@ impl Server {
         let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(preset_listener_addr).await;
 =======
+=======
+>>>>>>> 83192c9 (	modified:   share/src/main.rs)
         init_global_logger(self.log_target, self.max_log_level)?;
+        
         let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
 >>>>>>> c22d847 (	modified:   Cargo.lock)
@@ -246,6 +252,7 @@ impl Server {
         let local_addr = remote_listener.local_addr().unwrap();
         log::info!("Server start at {}\n", local_addr);
 <<<<<<< HEAD
+<<<<<<< HEAD
         config.set_listener_addr(local_addr);
         let mut config_store = global::config_store().await.write().await;
         config_store.set_config(config);
@@ -253,16 +260,19 @@ impl Server {
         if let Err(e) = ctrlc::set_handler(|| {
 =======
         
+=======
+
+>>>>>>> 83192c9 (	modified:   share/src/main.rs)
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
         config_store.set_listener_addr(local_addr);
-        if let Some(config_path) =self.config_path {
+        if let Some(config_path) = self.config_path {
             config_store.set_config_path(config_path);
             config_store.try_update_from_file()?;
         } else {
             config_store.set_config(self.config)?;
             config_store.update_to_file()?;
-        } 
+        }
         ctrlc::set_handler(|| {
 >>>>>>> c22d847 (	modified:   Cargo.lock)
             println!("CtrlC Pressed, Exiting forced now!");
