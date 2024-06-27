@@ -37,8 +37,12 @@ pub struct Server {
     log_target: env_logger::Target,
     max_log_level: log::LevelFilter,
     config: Config,
+<<<<<<< HEAD
     config_modified: LastModified,
     config_path: PathBuf,
+=======
+    config_path: Option<PathBuf>,
+>>>>>>> c22d847 (	modified:   Cargo.lock)
 }
 
 impl Default for Server {
@@ -47,14 +51,45 @@ impl Default for Server {
             max_log_level: log::LevelFilter::Info,
             log_target: env_logger::Target::Stdout,
             config: Config::default(),
+<<<<<<< HEAD
             config_modified: LastModified::Unknown,
             config_path: Config::default_config_path(),
+=======
+            config_path: None,
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         }
     }
 }
 
 impl Server {
+<<<<<<< HEAD
     pub fn set_max_log_level(&mut self, level: log::LevelFilter) {
+=======
+    fn checked_ipc_socket_name(name: &str) -> SmolStr {
+        if name.to_ns_name::<GenericNamespaced>().is_ok() {
+            return name.to_smolstr();
+        }
+        consts::DEFAULT_CLIENT_IPC_SOCK_NAME.to_smolstr()
+    }
+
+    pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
+        self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
+        self
+    }
+
+  
+    pub fn client_ipc_socket_name(&mut self, client_ipc_sock_name: &str) -> &mut Self {
+        self.client_ipc_sock_name = Self::checked_ipc_socket_name(client_ipc_sock_name);
+        self
+    }
+
+    pub fn listener_port(&mut self, port: u16) -> &mut Self {
+        self.config.set_listener_port(port);
+        self
+    }
+
+    pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         self.max_log_level = level;
     }
 
@@ -62,8 +97,17 @@ impl Server {
         self.log_target = target;
     }
 
+<<<<<<< HEAD
     pub fn set_ipc_socket_name(&mut self, ipc_socket_name: SmolStr) {
         self.config.set_ipc_socket_name(ipc_socket_name);
+=======
+    pub fn load_config_file(
+        &mut self,
+        config_file_path: PathBuf,
+    ) -> anyhow::Result<&mut Self> {
+        self.config_path = Some(config_file_path);
+        Ok(self)
+>>>>>>> c22d847 (	modified:   Cargo.lock)
     }
 
     pub fn set_listener_port(&mut self, port: u16) {
@@ -173,7 +217,12 @@ impl Server {
             std::process::exit(1);
         }
     }
+    
 
+    #[allow(unused_variables)]
+    async fn start_inner(self) -> anyhow::Result<()> {
+
+<<<<<<< HEAD
     async fn start_inner(self) -> anyhow::Result<()> {
         init_global_logger(self.log_target, self.max_log_level)?;
 
@@ -181,6 +230,11 @@ impl Server {
         let preset_listener_addr = config.listener_addr();
         let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(preset_listener_addr).await;
+=======
+        init_global_logger(self.log_target, self.max_log_level)?;
+        let remote_listener: TcpListener;
+        let listen_res = TcpListener::bind(self.config.listener_addr).await;
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         if let Err(e) = listen_res {
             if preset_listener_addr == consts::DEFAULT_LISTENER_ADDR {
                 return Err(e.into());
@@ -191,11 +245,26 @@ impl Server {
         }
         let local_addr = remote_listener.local_addr().unwrap();
         log::info!("Server start at {}\n", local_addr);
+<<<<<<< HEAD
         config.set_listener_addr(local_addr);
         let mut config_store = global::config_store().await.write().await;
         config_store.set_config(config);
         config_store.update_to_file()?;
         if let Err(e) = ctrlc::set_handler(|| {
+=======
+        
+        let conf_store_lock = global::config_store().await;
+        let mut config_store = conf_store_lock.write().await;
+        config_store.set_listener_addr(local_addr);
+        if let Some(config_path) =self.config_path {
+            config_store.set_config_path(config_path);
+            config_store.try_update_from_file()?;
+        } else {
+            config_store.set_config(self.config)?;
+            config_store.update_to_file()?;
+        } 
+        ctrlc::set_handler(|| {
+>>>>>>> c22d847 (	modified:   Cargo.lock)
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);
         }) {

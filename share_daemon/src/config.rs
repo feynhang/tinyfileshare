@@ -33,11 +33,16 @@ impl ConfigStore {
     pub(crate) fn default() -> Self {
         Self {
             current_config: Config::default(),
+<<<<<<< HEAD
             config_path: Config::default_config_path(),
+=======
+            config_path: Self::default_config_path(),
+>>>>>>> c22d847 (	modified:   Cargo.lock)
             last_modified: LastModified::Unknown,
         }
     }
 
+<<<<<<< HEAD
     pub(crate) fn set_config(&mut self, config: Config) {
         self.current_config = config;
     }
@@ -47,6 +52,32 @@ impl ConfigStore {
         Ok(())
     }
 
+=======
+    pub(crate) fn set_config_path(&mut self, path: PathBuf) {
+        self.config_path = path
+    }
+    
+    pub(crate) fn default_config_path() -> PathBuf {
+        let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
+        path.push(consts::DEFAULT_CONFIG_DIR_NAME);
+        if !path.exists() {
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        path.push(consts::DEFAULT_CONFIG_FILE_NAME);
+        path
+    }
+
+    pub(crate) fn set_config(&mut self, config: Config) -> anyhow::Result<()> {
+        self.current_config = config.checked().1;
+        Ok(())
+    }
+
+    pub(crate) fn update_to_file(&mut self) -> anyhow::Result<()> {
+        self.last_modified = self.write_to_file(&self.config_path)?;
+        Ok(())
+    }
+
+>>>>>>> c22d847 (	modified:   Cargo.lock)
     pub(crate) fn try_update_from_file(&mut self) -> anyhow::Result<()> {
         let f = Config::open_config_file_readonly(&self.config_path)?;
         if let LastModified::LastModTime(lastmod_time) = self.last_modified {
@@ -59,7 +90,11 @@ impl ConfigStore {
             self.current_config = c;
             self.last_modified = t;
         } else {
+<<<<<<< HEAD
             self.last_modified = self.current_config.write_to_file(&self.config_path)?;
+=======
+            self.last_modified = self.write_to_file(&self.config_path)?;
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         }
         Ok(())
     }
@@ -103,7 +138,10 @@ impl Default for Config {
 }
 
 impl Config {
+<<<<<<< HEAD
     // immutable self
+=======
+>>>>>>> c22d847 (	modified:   Cargo.lock)
 
     pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
         let mut f = File::create(p)?;
@@ -115,12 +153,38 @@ impl Config {
         Ok(LastModified::Unknown)
     }
 
+<<<<<<< HEAD
     pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
         self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
+=======
+    pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
+        File::open(config_path)
+>>>>>>> c22d847 (	modified:   Cargo.lock)
     }
+    
 
+<<<<<<< HEAD
     pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
         self.reg_hosts.get(hostname)
+=======
+    pub(crate) fn from_file<P: AsRef<Path>>(p: P) -> anyhow::Result<(Self, LastModified)> {
+        let mut f = File::open(p.as_ref())?;
+        let mut content = String::new();
+        if f.read_to_string(&mut content)? > 0 {
+            let (ok, config) = toml::from_str::<Config>(content.trim())?.checked();
+            let modified = if !ok {
+                config.write_to_file(p.as_ref())?
+            } else if let Ok(last_modified) = f.metadata()?.modified() {
+                LastModified::LastModTime(last_modified)
+            } else {
+                LastModified::Unknown
+            };
+
+            Ok((config, modified))
+        } else {
+            Err(anyhow::anyhow!("Config file is empty!"))
+        }
+>>>>>>> c22d847 (	modified:   Cargo.lock)
     }
 
     pub(crate) fn listener_addr(&self) -> SocketAddr {
@@ -294,13 +358,23 @@ mod config_tests {
 
     #[test]
     fn config_to_file_test() {
+<<<<<<< HEAD
         let res = get_config_store().write_to_file(&Config::default_config_path());
+=======
+        let res = get_config_store().write_to_file(&ConfigStore::default_config_path());
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         assert!(res.is_ok());
     }
 
     #[test]
     fn config_from_file_test() {
+<<<<<<< HEAD
         let res = Config::from_file(Config::default_config_path());
+=======
+        let res = Config::from_file(
+            ConfigStore::default_config_path(),
+        );
+>>>>>>> c22d847 (	modified:   Cargo.lock)
         assert!(res.is_ok());
         let (c, l) = res.unwrap();
         println!("Config: {:?}\n lastmodified: {:?}", c, l);
