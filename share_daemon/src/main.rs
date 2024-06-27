@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::{
     net::{IpAddr, SocketAddr},
     ops::{Deref, DerefMut},
