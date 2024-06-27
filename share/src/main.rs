@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::{net::SocketAddr, ops::Deref, path::PathBuf};
 
 use clap::{value_parser, Arg, ArgAction, Command};
