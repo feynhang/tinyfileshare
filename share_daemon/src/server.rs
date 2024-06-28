@@ -50,6 +50,18 @@ impl Default for Server {
 }
 
 impl Server {
+
+    pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
+        self.max_log_level = level;
+        self
+    }
+
+    pub fn log_target(&mut self, target: env_logger::Target) -> &mut Self {
+        self.log_target = target;
+        self
+    }
+
+    
     fn checked_ipc_socket_name(name: &str) -> SmolStr {
         if name.to_ns_name::<GenericNamespaced>().is_ok() {
             return name.to_smolstr();
@@ -72,15 +84,7 @@ impl Server {
         self
     }
 
-    pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
-        self.max_log_level = level;
-        self
-    }
-
-    pub fn log_target(&mut self, target: env_logger::Target) -> &mut Self {
-        self.log_target = target;
-        self
-    }
+   
 
     pub fn load_config_file(&mut self, config_file_path: PathBuf) -> anyhow::Result<&mut Self> {
         self.config_path = Some(config_file_path);
@@ -189,7 +193,7 @@ impl Server {
         } else {
             config_store.set_config(self.config)?;
         }
-        let preset_listener_addr = config_store.listener_addr;
+        let preset_listener_addr = config_store.listener_addr();
         let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(preset_listener_addr).await;
         if let Err(e) = listen_res {
@@ -213,7 +217,6 @@ impl Server {
         }
         
         global::set_server_ipc_sock_name(self.server_ipc_sock_name);
-        global::set_client_ipc_sock_name(self.client_ipc_sock_name);
         tokio::spawn(Self::start_local_listener());
         loop {
             match remote_listener.accept().await {

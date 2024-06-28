@@ -216,7 +216,7 @@ mod arg_id {
     pub const SVR_SOCK_NAME: &str = "server_socket";
     pub const CLT_SOCK_NAME: &str = "client_socket";
     pub const LOG_LEVEL: &str = "log_level";
-    pub const DEFAULT_SAVE_DIR: &str = "save_dir";
+    pub const SAVE_DIR: &str = "save_dir";
 }
 
 fn main() {
@@ -255,8 +255,8 @@ fn main() {
                 .ignore_case(true),
         )
         .arg(
-            clap::Arg::new(arg_id::DEFAULT_SAVE_DIR)
-                .long(arg_id::DEFAULT_SAVE_DIR)
+            clap::Arg::new(arg_id::SAVE_DIR)
+                .long(arg_id::SAVE_DIR)
                 .value_parser(clap::value_parser!(DirPath)),
         )
         .get_matches();

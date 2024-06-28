@@ -1,6 +1,7 @@
 pub mod local {
     pub const SHARE: &str = "SHARE";
     pub const REG: &str = "REG";
+    pub const INTERACTIVE: &str = "INTERACTIVE";
 }
 
 
@@ -10,7 +11,7 @@ pub mod client {
 }
 pub mod remote {
     pub const PORT: &str = "PORT";
-    pub const REG_ME: &str = "REG_ME";
+    // pub const REG_ME: &str = "REG_ME";
 }
 
 

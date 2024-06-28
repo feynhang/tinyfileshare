@@ -98,9 +98,10 @@ impl DerefMut for ConfigStore {
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub(crate) listener_addr: SocketAddr,
+    listener_addr: SocketAddr,
     num_workers: u8,
     receive_dir: PathBuf,
+    // client_sock_name: Option<SmolStr>,
     reg_hosts: HashMap<SmolStr, SocketAddr>,
 }
 
@@ -116,7 +117,8 @@ impl Default for Config {
 }
 
 impl Config {
-
+    // immutable self
+    
     pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
         let mut f = File::create(p)?;
         f.write_all(toml::to_string(&self)?.as_bytes())?;
@@ -127,10 +129,66 @@ impl Config {
         Ok(LastModified::Unknown)
     }
 
+    pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
+        self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
+    }
+
+    pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
+        self.reg_hosts.get(hostname)
+    }
+
+    // pub(crate) fn client_socket_name(&self) -> Option<SmolStr> {
+    //     self.client_sock_name.clone()
+    // }
+    
+    pub(crate) fn listener_addr(&self) -> SocketAddr {
+        self.listener_addr
+    }
+
+    pub(crate) fn receive_dir(&self) -> &Path {
+        &self.receive_dir
+    }
+
+    pub(crate) fn num_workers(&self) -> u8 {
+        self.num_workers
+    }
+
+    // mut self
+
+    pub(crate) fn register_host(
+        &mut self,
+        hostname: &str,
+        socket_addr: SocketAddr,
+    ) -> Option<SocketAddr> {
+        self.reg_hosts.insert(hostname.into(), socket_addr)
+    }
+
+    // pub(crate) fn set_client_sock_name(&mut self, name: SmolStr) {
+    //     self.client_sock_name = Some(name);
+    // }
+    
+    pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
+        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
+    }
+
+    pub(crate) fn set_num_workers(&mut self, n: u8) {
+        self.num_workers = Self::check_num_workers(n).1;
+    }
+
+    pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
+        self.listener_addr = addr;
+    }
+
+    pub(crate) fn set_listener_port(&mut self, port: u16) {
+        self.listener_addr.set_port(port);
+    }
+
+
+    // static
+    
     pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
         File::open(config_path)
     }
-    
 
     pub(crate) fn from_file<P: AsRef<Path>>(p: P) -> anyhow::Result<(Self, LastModified)> {
         let mut f = File::open(p.as_ref())?;
@@ -149,46 +207,6 @@ impl Config {
         } else {
             Err(anyhow::anyhow!("Config file is empty!"))
         }
-    }
-
-    pub(crate) fn register_host(
-        &mut self,
-        hostname: &str,
-        socket_addr: SocketAddr,
-    ) -> Option<SocketAddr> {
-        self.reg_hosts.insert(hostname.into(), socket_addr)
-    }
-
-    pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
-    }
-
-    pub(crate) fn receive_dir(&self) -> &Path {
-        &self.receive_dir
-    }
-
-    pub(crate) fn num_workers(&self) -> u8 {
-        self.num_workers
-    }
-
-    pub(crate) fn set_num_workers(&mut self, n: u8) {
-        self.num_workers = Self::check_num_workers(n).1;
-    }
-
-    pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
-        self.listener_addr = addr;
-    }
-
-    pub(crate) fn set_listener_port(&mut self, port: u16) {
-        self.listener_addr.set_port(port);
-    }
-
-    pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
-        self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
-    }
-
-    pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
-        self.reg_hosts.get(hostname)
     }
 
     fn check_num_workers(num: u8) -> (bool, u8) {

@@ -8,7 +8,7 @@ pub(crate) mod handler;
 pub mod consts {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
-    pub const STARTLINE_PIAR_SEP: char = ' ';
+    pub const PIAR_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
     pub const DEFAULT_LISTENER_PORT: u16 = 10020;
     pub(crate) const GET_HOME_DIR_FAILED: &str =
@@ -32,8 +32,8 @@ pub mod consts {
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
     pub const LINE_SEP: &str = "\r\n";
-    pub const NEWLINE: u8 = b'\n';
-    pub const ASCII_SPACE: u8 = b' ';
+    // pub const NEWLINE: char = '\n';
+    pub const ASCII_SPACE: char = ' ';
 
     pub const PATHS_NUM_PER_REQUEST: usize = crate::config::DEFAULT_NUM_WORKERS as usize - 1;
 
@@ -75,15 +75,15 @@ mod global {
     static mut IPC_SVR_SOCK_NAME: SmolStr =
         SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCK_NAME);
 
-    static mut IPC_CLT_SOCK_NAME: SmolStr =
-        SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME);
+    // static mut IPC_CLT_SOCK_NAME: SmolStr =
+    //     SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME);
     pub(crate) fn server_ipc_sock_name() -> &'static str {
         unsafe { IPC_SVR_SOCK_NAME.as_str() }
     }
 
-    pub(crate) fn client_ipc_sock_name() -> &'static str {
-        unsafe { IPC_CLT_SOCK_NAME.as_str() }
-    }
+    // pub(crate) fn client_ipc_sock_name() -> &'static str {
+    //     unsafe { IPC_CLT_SOCK_NAME.as_str() }
+    // }
 
     pub(crate) fn set_server_ipc_sock_name(server_socket_name: SmolStr) {
         unsafe {
@@ -91,11 +91,11 @@ mod global {
         }
     }
 
-    pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
-        unsafe {
-            IPC_CLT_SOCK_NAME = client_socket_name;
-        }
-    }
+    // pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
+    //     unsafe {
+    //         IPC_CLT_SOCK_NAME = client_socket_name;
+    //     }
+    // }
 }
 
 #[cfg(test)]
