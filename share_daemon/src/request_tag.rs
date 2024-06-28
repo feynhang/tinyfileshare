@@ -11,6 +11,10 @@ pub mod client {
 }
 pub mod remote {
     pub const PORT: &str = "PORT";
+<<<<<<< HEAD
+=======
+    // pub const REG_ME: &str = "REG_ME";
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
 }
 
 

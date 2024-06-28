@@ -352,8 +352,12 @@ mod arg_id {
     pub const SVR_SOCK_NAME: &str = "server_socket";
     pub const CLT_SOCK_NAME: &str = "client_socket";
     pub const LOG_LEVEL: &str = "log_level";
+<<<<<<< HEAD
     pub const DEFAULT_SAVE_DIR: &str = "save_dir";
 >>>>>>> c22d847 (	modified:   Cargo.lock)
+=======
+    pub const SAVE_DIR: &str = "save_dir";
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
 }
 
 fn main() {
@@ -413,12 +417,17 @@ fn main() {
         )
         .arg(
 <<<<<<< HEAD
+<<<<<<< HEAD
             clap::Arg::new(arg_id::FILES_SAVE_DIR)
                 .long(arg_id::FILES_SAVE_DIR)
 =======
             clap::Arg::new(arg_id::DEFAULT_SAVE_DIR)
                 .long(arg_id::DEFAULT_SAVE_DIR)
 >>>>>>> c22d847 (	modified:   Cargo.lock)
+=======
+            clap::Arg::new(arg_id::SAVE_DIR)
+                .long(arg_id::SAVE_DIR)
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
                 .value_parser(clap::value_parser!(DirPath)),
         )
         .get_matches();

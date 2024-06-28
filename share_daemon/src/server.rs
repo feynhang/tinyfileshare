@@ -63,8 +63,23 @@ impl Default for Server {
 
 impl Server {
 <<<<<<< HEAD
+<<<<<<< HEAD
     pub fn set_max_log_level(&mut self, level: log::LevelFilter) {
 =======
+=======
+
+    pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
+        self.max_log_level = level;
+        self
+    }
+
+    pub fn log_target(&mut self, target: env_logger::Target) -> &mut Self {
+        self.log_target = target;
+        self
+    }
+
+    
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
     fn checked_ipc_socket_name(name: &str) -> SmolStr {
         if name.to_ns_name::<GenericNamespaced>().is_ok() {
             return name.to_smolstr();
@@ -87,6 +102,7 @@ impl Server {
         self
     }
 
+<<<<<<< HEAD
     pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
 >>>>>>> c22d847 (	modified:   Cargo.lock)
         self.max_log_level = level;
@@ -95,6 +111,9 @@ impl Server {
     pub fn set_log_target(&mut self, target: env_logger::Target) {
         self.log_target = target;
     }
+=======
+   
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
 
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -245,7 +264,7 @@ impl Server {
         } else {
             config_store.set_config(self.config)?;
         }
-        let preset_listener_addr = config_store.listener_addr;
+        let preset_listener_addr = config_store.listener_addr();
         let remote_listener: TcpListener;
 <<<<<<< HEAD
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
@@ -303,8 +322,11 @@ impl Server {
 =======
         
         global::set_server_ipc_sock_name(self.server_ipc_sock_name);
+<<<<<<< HEAD
         global::set_client_ipc_sock_name(self.client_ipc_sock_name);
 >>>>>>> 2700b27 (	modified:   share_daemon/src/server.rs)
+=======
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
         tokio::spawn(Self::start_local_listener());
         loop {
             match remote_listener.accept().await {

@@ -121,7 +121,11 @@ pub struct Config {
     listener_addr: SocketAddr,
     num_workers: u8,
     receive_dir: PathBuf,
+<<<<<<< HEAD
     ipc_socket_name: SmolStr,
+=======
+    // client_sock_name: Option<SmolStr>,
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
     reg_hosts: HashMap<SmolStr, SocketAddr>,
 }
 
@@ -139,10 +143,15 @@ impl Default for Config {
 
 impl Config {
 <<<<<<< HEAD
+<<<<<<< HEAD
     // immutable self
 =======
 >>>>>>> c22d847 (	modified:   Cargo.lock)
 
+=======
+    // immutable self
+    
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
     pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
         let mut f = File::create(p)?;
         f.write_all(toml::to_string(&self)?.as_bytes())?;
@@ -154,14 +163,73 @@ impl Config {
     }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
         self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
 =======
+=======
+    pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
+        self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
+    }
+
+    pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
+        self.reg_hosts.get(hostname)
+    }
+
+    // pub(crate) fn client_socket_name(&self) -> Option<SmolStr> {
+    //     self.client_sock_name.clone()
+    // }
+    
+    pub(crate) fn listener_addr(&self) -> SocketAddr {
+        self.listener_addr
+    }
+
+    pub(crate) fn receive_dir(&self) -> &Path {
+        &self.receive_dir
+    }
+
+    pub(crate) fn num_workers(&self) -> u8 {
+        self.num_workers
+    }
+
+    // mut self
+
+    pub(crate) fn register_host(
+        &mut self,
+        hostname: &str,
+        socket_addr: SocketAddr,
+    ) -> Option<SocketAddr> {
+        self.reg_hosts.insert(hostname.into(), socket_addr)
+    }
+
+    // pub(crate) fn set_client_sock_name(&mut self, name: SmolStr) {
+    //     self.client_sock_name = Some(name);
+    // }
+    
+    pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
+        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
+    }
+
+    pub(crate) fn set_num_workers(&mut self, n: u8) {
+        self.num_workers = Self::check_num_workers(n).1;
+    }
+
+    pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
+        self.listener_addr = addr;
+    }
+
+    pub(crate) fn set_listener_port(&mut self, port: u16) {
+        self.listener_addr.set_port(port);
+    }
+
+
+    // static
+    
+>>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
     pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
         File::open(config_path)
 >>>>>>> c22d847 (	modified:   Cargo.lock)
     }
-    
 
 <<<<<<< HEAD
     pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
