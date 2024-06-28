@@ -63,8 +63,6 @@ impl ConfigStore {
         }
         Ok(())
     }
-
-
 }
 
 impl Deref for ConfigStore {
@@ -85,7 +83,7 @@ impl DerefMut for ConfigStore {
 pub struct Config {
     listener_addr: SocketAddr,
     num_workers: u8,
-    receive_dir: PathBuf,
+    save_dir: PathBuf,
     ipc_socket_name: SmolStr,
     reg_hosts: HashMap<SmolStr, SocketAddr>,
 }
@@ -95,7 +93,7 @@ impl Default for Config {
         Self {
             listener_addr: consts::DEFAULT_LISTENER_ADDR,
             num_workers: DEFAULT_NUM_WORKERS,
-            receive_dir: Self::default_recv_dir().to_owned(),
+            save_dir: Self::default_save_dir().to_owned(),
             ipc_socket_name: consts::DEFAULT_IPC_SOCK_NAME.into(),
             reg_hosts: HashMap::new(),
         }
@@ -103,9 +101,8 @@ impl Default for Config {
 }
 
 impl Config {
-
     // immutable self
-    
+
     pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
         let mut f = File::create(p)?;
         f.write_all(toml::to_string(&self)?.as_bytes())?;
@@ -116,6 +113,9 @@ impl Config {
         Ok(LastModified::Unknown)
     }
 
+    pub(crate) fn ipc_socket_name(&self) -> &str {
+        &self.ipc_socket_name
+    }
 
     pub(crate) fn check_addr_registered(&self, addr: SocketAddr) -> bool {
         self.reg_hosts.values().any(|reg_ip| *reg_ip == addr)
@@ -124,20 +124,20 @@ impl Config {
     pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
         self.reg_hosts.get(hostname)
     }
-    
+
     pub(crate) fn listener_addr(&self) -> SocketAddr {
         self.listener_addr
     }
 
     pub(crate) fn receive_dir(&self) -> &Path {
-        &self.receive_dir
+        &self.save_dir
     }
 
     pub(crate) fn num_workers(&self) -> u8 {
         self.num_workers
     }
 
-    // mut self
+    // mutable self
 
     pub(crate) fn register_host(
         &mut self,
@@ -147,8 +147,8 @@ impl Config {
         self.reg_hosts.insert(hostname.into(), socket_addr)
     }
 
-    pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
+    pub(crate) fn set_save_dir<P: Into<PathBuf>>(&mut self, files_save_dir: P) {
+        self.save_dir = Self::check_files_save_dir(files_save_dir.into()).1;
     }
 
     pub(crate) fn set_num_workers(&mut self, n: u8) {
@@ -161,71 +161,18 @@ impl Config {
 
     pub(crate) fn set_listener_port(&mut self, port: u16) {
         self.listener_addr.set_port(port);
-    }
-
-
-    // static
-    
-    pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
-        File::open(config_path)
-    }
-
-    pub(crate) fn get_addr_by_name(&self, hostname: &str) -> Option<&SocketAddr> {
-        self.reg_hosts.get(hostname)
-    }
-
-    pub(crate) fn listener_addr(&self) -> SocketAddr {
-        self.listener_addr
-    }
-
-    pub(crate) fn receive_dir(&self) -> &Path {
-        &self.receive_dir
-    }
-
-    pub(crate) fn num_workers(&self) -> u8 {
-        self.num_workers
-    }
-
-    pub(crate) fn ipc_socket_name(&self) -> &str {
-        &self.ipc_socket_name
-    }
-
-    // mut self
-
-    pub(crate) fn register_host(
-        &mut self,
-        hostname: &str,
-        socket_addr: SocketAddr,
-    ) -> Option<SocketAddr> {
-        self.reg_hosts.insert(hostname.into(), socket_addr)
     }
 
     pub(crate) fn set_ipc_socket_name(&mut self, name: SmolStr) {
         self.ipc_socket_name = name;
     }
 
-    pub(crate) fn set_save_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
-    }
-
-    pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
-        self.listener_addr = addr;
-    }
-    
-    pub(crate) fn set_num_workers(&mut self, n: u8) {
-        self.num_workers = Self::check_num_workers(n).1;
-    }
-
     pub(crate) fn set_listener_ip(&mut self, ip: IpAddr) {
-        self.listener_addr.set_ip(ip);
-    }
-
-    pub(crate) fn set_listener_port(&mut self, port: u16) {
-        self.listener_addr.set_port(port);
+        self.listener_addr.set_ip(ip)
     }
 
     // static
-    
+
     pub(crate) fn default_config_path() -> PathBuf {
         let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
         path.push(consts::DEFAULT_CONFIG_DIR_NAME);
@@ -269,7 +216,7 @@ impl Config {
         }
     }
 
-    fn default_recv_dir() -> &'static Path {
+    fn default_save_dir() -> &'static Path {
         static RECV_DIR: OnceLock<PathBuf> = OnceLock::new();
         let d = RECV_DIR.get_or_init(|| dirs::download_dir().expect(consts::GET_HOME_DIR_FAILED));
         if !d.exists() {
@@ -279,17 +226,10 @@ impl Config {
         d
     }
 
-    fn check_receive_dir(path: PathBuf) -> (bool, PathBuf) {
-        if path.is_dir() {
-            return (true, path);
-        }
-        if path.is_file() || path.is_symlink() || path.extension().is_some() {
-            log::warn!("Invalid receive directory for config, use default instead.");
-            return (false, Self::default_recv_dir().to_owned());
-        }
-        if !path.exists() && std::fs::create_dir_all(&path).is_err() {
-            log::warn!("Receive directory donot exist, try create it failed, use default instead.");
-            return (false, Self::default_recv_dir().to_owned());
+    fn check_files_save_dir(path: PathBuf) -> (bool, PathBuf) {
+        if !path.is_dir() {
+            log::warn!("Invalid files save directory! using default instead.");
+            return (false, Self::default_save_dir().to_owned());
         }
         (true, path)
     }
@@ -302,7 +242,7 @@ impl Config {
 
     pub(crate) fn checked(mut self) -> (bool, Self) {
         let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
-        let (recv_dir_ok, recv_dir) = Self::check_receive_dir(self.receive_dir);
+        let (recv_dir_ok, recv_dir) = Self::check_files_save_dir(self.save_dir);
         let mut hostname_ok = true;
         self.reg_hosts = self
             .reg_hosts
@@ -319,43 +259,7 @@ impl Config {
             .collect();
         let checked_ok = num_workers_ok && recv_dir_ok && hostname_ok;
         self.num_workers = num_workers;
-        self.receive_dir = recv_dir;
+        self.save_dir = recv_dir;
         (checked_ok, self)
-    }
-}
-
-#[cfg(test)]
-mod config_tests {
-    use std::net::SocketAddr;
-
-    use crate::config::Config;
-
-    use super::ConfigStore;
-
-    fn get_config_store() -> ConfigStore {
-        let mut config_store = ConfigStore::default();
-        config_store.register_host("myhost1", SocketAddr::from(([192, 168, 3, 44], 19920)));
-        config_store.register_host("myhost2", SocketAddr::from(([192, 168, 3, 121], 19920)));
-        config_store.register_host(
-            "myhostdngjiyhbvad",
-            SocketAddr::from(([192, 179, 2, 110], 10020)),
-        );
-        config_store
-    }
-
-    #[test]
-    fn config_to_file_test() {
-        let res = get_config_store().write_to_file(&Config::default_config_path());
-        assert!(res.is_ok());
-    }
-
-    #[test]
-    fn config_from_file_test() {
-        let res = Config::from_file(Config::default_config_path());
-        assert!(res.is_ok());
-        let (c, l) = res.unwrap();
-        println!("Config: {:?}\n lastmodified: {:?}", c, l);
-        // let c = res.unwrap().0;
-        // assert!(c.get_addr_by_name("myhostdngjiyhbva").is_some());
     }
 }

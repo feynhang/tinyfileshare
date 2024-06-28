@@ -39,7 +39,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
         tokio::io::BufReader::new(local_read_half).take(consts::HOST_NAME_LENGTH_LIMIT as u64 + 50);
     let mut line = String::new();
     if local_reader.read_line(&mut line).await? != 0 {
-        if let Some((command, arg)) = line.trim().split_once(consts::PIAR_SEP) {
+        if let Some((command, arg)) = line.trim().split_once(consts::STARTLINE_SEP) {
             match command {
                 request_tag::local::SHARE => {
                     if let Some(host) = global::config_store()
@@ -155,7 +155,7 @@ async fn handle_file_send(
         let mut line = String::with_capacity(50);
         let mut remote_reader = BufReader::with_capacity(128, remote_read_half).take(50);
         if remote_reader.read_line(&mut line).await? != 0 {
-            let mut resp_parts = line.trim().split(consts::PIAR_SEP);
+            let mut resp_parts = line.trim().split(consts::STARTLINE_SEP);
             match resp_parts.next().unwrap() {
                 response_tag::remote::UNREGISTERED_HOST => {
                     local_write_half
@@ -223,7 +223,7 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
         let mut remote_reader = BufReader::new(remote_read_half).take(first_line_length_limit);
         let mut line = String::new();
         if remote_reader.read_line(&mut line).await? != 0 {
-            if let Some((req_tag, arg)) = line.trim().split_once(consts::PIAR_SEP) {
+            if let Some((req_tag, arg)) = line.trim().split_once(consts::STARTLINE_SEP) {
                 if req_tag == request_tag::remote::PORT {
                     if config_lock.read().await.check_addr_registered(peer_addr) {
                         if let Ok(expected_port) = arg.parse::<u16>() {
@@ -325,7 +325,7 @@ async fn send_files(
     let mut reader = BufReader::new(remote_read_half).take(10);
     let mut line = String::new();
     if reader.read_line(&mut line).await? != 0 {
-        let mut resp_parts = line.split(consts::PIAR_SEP);
+        let mut resp_parts = line.split(consts::STARTLINE_SEP);
         if resp_parts.next().unwrap() == response_tag::remote::FILES_RECEIVED
             && resp_parts.clone().count() == 2
         {

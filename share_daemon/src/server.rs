@@ -70,31 +70,10 @@ impl Server {
         self
     }
 
-    
-    fn checked_ipc_socket_name(name: &str) -> SmolStr {
-        if name.to_ns_name::<GenericNamespaced>().is_ok() {
-            return name.to_smolstr();
-        }
-        consts::DEFAULT_CLIENT_IPC_SOCK_NAME.to_smolstr()
-    }
-
-    pub fn server_ipc_socket_name(&mut self, server_ipc_sock_name: &str) -> &mut Self {
-        self.server_ipc_sock_name = Self::checked_ipc_socket_name(server_ipc_sock_name);
-        self
-    }
-
-    pub fn client_ipc_socket_name(&mut self, client_ipc_sock_name: &str) -> &mut Self {
-        self.client_ipc_sock_name = Self::checked_ipc_socket_name(client_ipc_sock_name);
-        self
-    }
 
     pub fn listener_port(&mut self, port: u16) -> &mut Self {
         self.config.set_listener_port(port);
         self
-    }
-
-    pub fn max_log_level(&mut self, level: log::LevelFilter) -> &mut Self {
-        self.max_log_level = level;
     }
 
     pub fn set_log_target(&mut self, target: env_logger::Target) {
@@ -103,8 +82,6 @@ impl Server {
 
     pub fn set_ipc_socket_name(&mut self, ipc_socket_name: SmolStr) {
         self.config.set_ipc_socket_name(ipc_socket_name);
-        self.config_path = Some(config_file_path);
-        Ok(self)
     }
 
     pub fn set_listener_port(&mut self, port: u16) {
@@ -136,8 +113,8 @@ impl Server {
         self.config.set_num_workers(n);
     }
 
-    pub fn set_save_dir<P: Into<PathBuf>>(&mut self, receive_dir: P) {
-        self.config.set_save_dir(receive_dir);
+    pub fn set_save_dir<P: Into<PathBuf>>(&mut self, save_dir: P) {
+        self.config.set_save_dir(save_dir);
     }
 
     pub fn register_host(&mut self, hostname: &str, host: SocketAddr) -> anyhow::Result<()> {
@@ -218,21 +195,8 @@ impl Server {
 
     async fn start_inner(self) -> anyhow::Result<()> {
         init_global_logger(self.log_target, self.max_log_level)?;
-
         let mut config = self.config;
         let preset_listener_addr = config.listener_addr();
-        let remote_listener: TcpListener;
-        let listen_res = TcpListener::bind(preset_listener_addr).await;
-        init_global_logger(self.log_target, self.max_log_level)?;
-        let conf_store_lock = global::config_store().await;
-        let mut config_store = conf_store_lock.write().await;
-        
-        if let Some(config_path) = self.config_path {
-            config_store.try_update_from_file()?;
-        } else {
-            config_store.set_config(self.config)?;
-        }
-        let preset_listener_addr = config_store.listener_addr();
         let remote_listener: TcpListener;
         let listen_res = TcpListener::bind(preset_listener_addr).await;
         if let Err(e) = listen_res {
@@ -248,26 +212,7 @@ impl Server {
         config.set_listener_addr(local_addr);
         let mut config_store = global::config_store().await.write().await;
         config_store.set_config(config);
-        config_store.update_to_file()?;
-        let conf_store_lock = global::config_store().await;
-        let mut config_store = conf_store_lock.write().await;
-        
-        if let Some(config_path) = self.config_path {
-            config_store.set_config_path(config_path);
-            config_store.try_update_from_file()?;
-            config_store.set_listener_addr(local_addr);
-        } else {
-            config_store.set_config(self.config)?;
-            config_store.set_listener_addr(local_addr);
-            config_store.update_to_file()?;
-        }
-        ctrlc::set_handler(|| {
-            log::info!("CtrlC entered, exit now!");
-            std::process::exit(0);
-        }).expect("msg");
-        config_store.set_listener_addr(local_addr);
-        config_store.update_to_file()?;
-        
+        config_store.update_to_file()?;        
         if let Err(e) = ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);

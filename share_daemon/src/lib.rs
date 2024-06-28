@@ -8,7 +8,9 @@ pub(crate) mod handler;
 pub mod consts {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
-    pub const PIAR_SEP: char = ' ';
+    pub const LINE_SEP: &str = "\r\n";
+    pub const ASCII_SPACE: char = ' ';
+    pub const STARTLINE_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
     pub(crate) const GET_HOME_DIR_FAILED: &str =
         "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
@@ -29,8 +31,7 @@ pub mod consts {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 10020);
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
-    pub const LINE_SEP: &str = "\r\n";
-    pub const ASCII_SPACE: char = ' ';
+  
 
     pub const PATHS_NUM_PER_REQUEST: usize = 4;
 
