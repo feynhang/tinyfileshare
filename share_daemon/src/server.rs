@@ -178,14 +178,22 @@ impl Server {
         }
     }
 
-    #[allow(unused_variables)]
     async fn start_inner(self) -> anyhow::Result<()> {
         init_global_logger(self.log_target, self.max_log_level)?;
+        let conf_store_lock = global::config_store().await;
+        let mut config_store = conf_store_lock.write().await;
         
+        if let Some(config_path) = self.config_path {
+            config_store.set_config_path(config_path);
+            config_store.try_update_from_file()?;
+        } else {
+            config_store.set_config(self.config)?;
+        }
+        let preset_listener_addr = config_store.listener_addr;
         let remote_listener: TcpListener;
-        let listen_res = TcpListener::bind(self.config.listener_addr).await;
+        let listen_res = TcpListener::bind(preset_listener_addr).await;
         if let Err(e) = listen_res {
-            if self.config.listener_addr == consts::DEFAULT_LISTENER_ADDR {
+            if preset_listener_addr == consts::DEFAULT_LISTENER_ADDR {
                 return Err(e.into());
             }
             remote_listener = TcpListener::bind(consts::DEFAULT_LISTENER_ADDR).await?;
@@ -194,31 +202,25 @@ impl Server {
         }
         let local_addr = remote_listener.local_addr().unwrap();
         log::info!("Server start at {}\n", local_addr);
-
-        let conf_store_lock = global::config_store().await;
-        let mut config_store = conf_store_lock.write().await;
         config_store.set_listener_addr(local_addr);
-        if let Some(config_path) = self.config_path {
-            config_store.set_config_path(config_path);
-            config_store.try_update_from_file()?;
-        } else {
-            config_store.set_config(self.config)?;
-            config_store.update_to_file()?;
-        }
-        ctrlc::set_handler(|| {
+        config_store.update_to_file()?;
+        
+        if let Err(e) = ctrlc::set_handler(|| {
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);
-        })
-        .expect("Set Ctrl+C event handler failed!");
+        }) {
+            log::warn!("Set CtrlC event failed! detail: {e}");
+        }
+        
         global::set_server_ipc_sock_name(self.server_ipc_sock_name);
         global::set_client_ipc_sock_name(self.client_ipc_sock_name);
         tokio::spawn(Self::start_local_listener());
         loop {
             match remote_listener.accept().await {
-                Ok((socket, addr)) => {
+                Ok((stream, addr)) => {
                     Self::try_join().await;
                     join_set().spawn(async move {
-                        if let Err(e) = handler::handle_remote(socket, addr).await {
+                        if let Err(e) = handler::handle_remote(stream, addr).await {
                             log::error!("Error occurred while handling a remote connection: {}", e);
                         }
                     });
