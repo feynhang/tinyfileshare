@@ -251,12 +251,14 @@ impl Server {
         config_store.update_to_file()?;
         let conf_store_lock = global::config_store().await;
         let mut config_store = conf_store_lock.write().await;
-        config_store.set_listener_addr(local_addr);
+        
         if let Some(config_path) = self.config_path {
             config_store.set_config_path(config_path);
             config_store.try_update_from_file()?;
+            config_store.set_listener_addr(local_addr);
         } else {
             config_store.set_config(self.config)?;
+            config_store.set_listener_addr(local_addr);
             config_store.update_to_file()?;
         }
         ctrlc::set_handler(|| {
