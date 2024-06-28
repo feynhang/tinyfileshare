@@ -7,37 +7,21 @@ pub(crate) mod handler;
 
 pub mod consts {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
+    pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
+    const DEFAULT_PORT: u16 = 10020;
+    pub const DEFAULT_LISTENER_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_PORT);
+    pub const DEFAULT_IPC_SOCK_NAME: &str = "share.sock";
     pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
     pub const LINE_SEP: &str = "\r\n";
     pub const ASCII_SPACE: char = ' ';
     pub const STARTLINE_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
-    pub(crate) const GET_HOME_DIR_FAILED: &str =
-        "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
-
-    pub const KB: usize = 1024;
-    pub const MB: usize = usize::pow(KB, 2);
-    pub const GB: usize = usize::pow(MB, 2);
-    pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
-    pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
-
     pub const FILE_NAME_LENGTH_LIMIT: usize = 260;
-
-    pub const DEFAULT_IPC_SOCK_NAME: &str = "share.sock";
-    pub const UNSPECIFIED_PORT: u16 = 0;
-    pub const PORT_TEST_BOUND: u16 = 1000;
-
-    pub const DEFAULT_LISTENER_ADDR: SocketAddr =
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 10020);
+    pub const NUMBER_PATHS_PER_REQUEST: usize = 4;
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
-
-  
-
-    pub const PATHS_NUM_PER_REQUEST: usize = 4;
-
     pub const FILE_PATH_LIMIT: u64 = 500;
-
-    pub const MAX_IP_LEN: u64 = 46;
 }
 
 mod global {
@@ -65,8 +49,6 @@ mod global {
             }
         }
     }
-
-
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::{
     net::{IpAddr, SocketAddr},
     ops::{Deref, DerefMut},
@@ -6,7 +5,6 @@ use std::{
 };
 
 use faccess::{AccessMode, PathExt};
-use fshare_server::server;
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use smol_str::{SmolStr, StrExt};
 
@@ -301,7 +299,7 @@ fn main() {
         server.set_save_dir(files_save_dir);
     }
 
-    if let Err(e) = server::Server::default().start() {
+    if let Err(e) = server.start() {
         eprintln!("Start server failed: \ndetail: {}", e);
     }
 }

@@ -48,10 +48,10 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                         .await
                         .get_addr_by_name(arg)
                     {
-                        let mut recv_paths = Vec::with_capacity(consts::PATHS_NUM_PER_REQUEST);
+                        let mut recv_paths = Vec::with_capacity(consts::NUMBER_PATHS_PER_REQUEST);
                         local_reader.set_limit(consts::FILE_PATH_LIMIT);
                         line.clear();
-                        while recv_paths.len() < consts::PATHS_NUM_PER_REQUEST
+                        while recv_paths.len() < consts::NUMBER_PATHS_PER_REQUEST
                             && local_reader.read_line(&mut line).await? != 0
                             && !line.trim().is_empty()
                         {
@@ -159,12 +159,12 @@ async fn handle_file_send(
             match resp_parts.next().unwrap() {
                 response_tag::remote::UNREGISTERED_HOST => {
                     local_write_half
-                        .write_line(response_tag::local::UNREGISTERED_REMOTE)
+                        .write_line(response_tag::local::REMOTE_UNREGISTERED)
                         .await?
                 }
                 response_tag::remote::NO_AVAILABLE_PORT => {
                     local_write_half
-                        .write_line(response_tag::local::NO_AVAILABLE_PORT_REMOTE)
+                        .write_line(response_tag::local::REMOTE_NO_AVAILABLE_PORT)
                         .await?
                 }
                 response_tag::remote::PORT_CONFIRM if resp_parts.clone().count() == 2 => {
@@ -229,7 +229,11 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                         if let Ok(expected_port) = arg.parse::<u16>() {
                             if let Some(l) = create_receive_listener(expected_port).await {
                                 let actual_port = l.local_addr()?.port();
-                                tokio::spawn(receive_files(l, peer_addr.ip()));
+                                tokio::spawn(async move {
+                                    if let Err(e) = receive_files(l, peer_addr.ip()).await {
+                                        log::error!("Error occurred in `receive_files`, error detail: {}", e);
+                                    }
+                                });
                                 remote_writer
                                     .write_line(smol_str::format_smolstr!(
                                         "{} {}",
@@ -462,15 +466,6 @@ async fn create_receive_listener(port: u16) -> Option<tokio::net::TcpListener> {
     }
     None
 }
-
-// async fn try_connect_client(
-//     client_ipc_name: SmolStr,
-// ) -> std::io::Result<interprocess::local_socket::tokio::Stream> {
-//     interprocess::local_socket::tokio::Stream::connect(
-//         client_ipc_name.to_ns_name::<GenericNamespaced>().unwrap(),
-//     )
-//     .await
-// }
 
 #[cfg(test)]
 mod tests {}

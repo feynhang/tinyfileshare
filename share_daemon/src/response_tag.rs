@@ -18,8 +18,8 @@ pub mod remote {
 
 
 pub mod local {
-    pub const UNREGISTERED_REMOTE: &str = "UNREGISTERED_REMOTE";
-    pub const NO_AVAILABLE_PORT_REMOTE: &str = "NO_AVAILABLE_PORT_REMOTE";
+    pub const REMOTE_UNREGISTERED: &str = "REMOTE_UNREGISTERED";
+    pub const REMOTE_NO_AVAILABLE_PORT: &str = "REMOTE_NO_AVAILABLE_PORT";
     pub const UNREACHABLE_ADDRESS: &str = "UNREACHABLE_ADDRESS";
     pub const ALL_FILES_SENT_SUCCEEDED: &str = "ALL_FILES_SENT_SUCCEEDED";  
     pub const PROGRESS: &str = "PROGRESS";

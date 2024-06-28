@@ -12,7 +12,8 @@ use std::{
 use smol_str::SmolStr;
 
 use crate::consts;
-
+pub(crate) const GET_HOME_DIR_FAILED: &str =
+        "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
 pub(crate) const MAX_WORKERS: u8 = 120;
 
@@ -174,7 +175,7 @@ impl Config {
     // static
 
     pub(crate) fn default_config_path() -> PathBuf {
-        let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
+        let mut path = dirs::home_dir().expect(GET_HOME_DIR_FAILED);
         path.push(consts::DEFAULT_CONFIG_DIR_NAME);
         if !path.exists() {
             std::fs::create_dir_all(&path).unwrap();
@@ -218,7 +219,7 @@ impl Config {
 
     fn default_save_dir() -> &'static Path {
         static RECV_DIR: OnceLock<PathBuf> = OnceLock::new();
-        let d = RECV_DIR.get_or_init(|| dirs::download_dir().expect(consts::GET_HOME_DIR_FAILED));
+        let d = RECV_DIR.get_or_init(|| dirs::download_dir().expect(GET_HOME_DIR_FAILED));
         if !d.exists() {
             std::fs::create_dir_all(d)
                 .expect("Unexpected: create default receive(Download) directory failed!");

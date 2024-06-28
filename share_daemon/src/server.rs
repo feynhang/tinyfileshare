@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{
-    config::{Config, LastModified},
+    config::Config,
     consts, global, handler,
 };
 
@@ -37,7 +37,6 @@ pub struct Server {
     log_target: env_logger::Target,
     max_log_level: log::LevelFilter,
     config: Config,
-    config_modified: LastModified,
     config_path: PathBuf,
 }
 
@@ -47,7 +46,6 @@ impl Default for Server {
             max_log_level: log::LevelFilter::Info,
             log_target: env_logger::Target::Stdout,
             config: Config::default(),
-            config_modified: LastModified::Unknown,
             config_path: Config::default_config_path(),
         }
     }
@@ -98,13 +96,11 @@ impl Server {
 
     pub fn load_config_file<P: AsRef<Path>>(&mut self, config_file_path: P) -> anyhow::Result<()> {
         let p = config_file_path.as_ref();
-        let (c, t) = Config::from_file(p)?;
-        let (ok, c) = c.checked();
+        let (ok, c) = Config::from_file(p)?.0.checked();
         if !ok {
             c.write_to_file(p)?;
         }
         self.config = c;
-        self.config_modified = t;
         p.clone_into(&mut self.config_path);
         Ok(())
     }
@@ -207,7 +203,7 @@ impl Server {
         } else {
             remote_listener = listen_res.unwrap();
         }
-        let local_addr = remote_listener.local_addr().unwrap();
+        let local_addr = remote_listener.local_addr()?;
         log::info!("Server start at {}\n", local_addr);
         config.set_listener_addr(local_addr);
         let mut config_store = global::config_store().await.write().await;
