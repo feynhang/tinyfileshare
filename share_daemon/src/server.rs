@@ -221,7 +221,6 @@ impl Server {
         }
     }
 
-    #[allow(unused_variables)]
     async fn start_inner(self) -> anyhow::Result<()> {
 <<<<<<< HEAD
 
@@ -237,10 +236,23 @@ impl Server {
 =======
 >>>>>>> 83192c9 (	modified:   share/src/main.rs)
         init_global_logger(self.log_target, self.max_log_level)?;
+        let conf_store_lock = global::config_store().await;
+        let mut config_store = conf_store_lock.write().await;
         
+        if let Some(config_path) = self.config_path {
+            config_store.set_config_path(config_path);
+            config_store.try_update_from_file()?;
+        } else {
+            config_store.set_config(self.config)?;
+        }
+        let preset_listener_addr = config_store.listener_addr;
         let remote_listener: TcpListener;
+<<<<<<< HEAD
         let listen_res = TcpListener::bind(self.config.listener_addr).await;
 >>>>>>> c22d847 (	modified:   Cargo.lock)
+=======
+        let listen_res = TcpListener::bind(preset_listener_addr).await;
+>>>>>>> 2700b27 (	modified:   share_daemon/src/server.rs)
         if let Err(e) = listen_res {
             if preset_listener_addr == consts::DEFAULT_LISTENER_ADDR {
                 return Err(e.into());
@@ -251,6 +263,7 @@ impl Server {
         }
         let local_addr = remote_listener.local_addr().unwrap();
         log::info!("Server start at {}\n", local_addr);
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
         config.set_listener_addr(local_addr);
@@ -275,11 +288,23 @@ impl Server {
         }
         ctrlc::set_handler(|| {
 >>>>>>> c22d847 (	modified:   Cargo.lock)
+=======
+        config_store.set_listener_addr(local_addr);
+        config_store.update_to_file()?;
+        
+        if let Err(e) = ctrlc::set_handler(|| {
+>>>>>>> 2700b27 (	modified:   share_daemon/src/server.rs)
             println!("CtrlC Pressed, Exiting forced now!");
             std::process::exit(0);
         }) {
             log::warn!("Set CtrlC event failed! detail: {e}");
         }
+<<<<<<< HEAD
+=======
+        
+        global::set_server_ipc_sock_name(self.server_ipc_sock_name);
+        global::set_client_ipc_sock_name(self.client_ipc_sock_name);
+>>>>>>> 2700b27 (	modified:   share_daemon/src/server.rs)
         tokio::spawn(Self::start_local_listener());
         loop {
             match remote_listener.accept().await {
