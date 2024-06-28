@@ -30,10 +30,6 @@ pub mod consts {
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
     pub const LINE_SEP: &str = "\r\n";
-<<<<<<< HEAD
-=======
-    // pub const NEWLINE: char = '\n';
->>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
     pub const ASCII_SPACE: char = ' ';
 
     pub const PATHS_NUM_PER_REQUEST: usize = 4;
@@ -49,10 +45,6 @@ mod global {
     use tokio::sync::RwLock;
 
     use crate::config::ConfigStore;
-<<<<<<< HEAD
-=======
-    use crate::consts;
->>>>>>> c22d847 (	modified:   Cargo.lock)
 
     pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
         static mut CONFIG: OnceLock<RwLock<ConfigStore>> = OnceLock::new();
@@ -68,52 +60,12 @@ mod global {
                     }
                     conf_store_lock
                 }
-<<<<<<< HEAD
                 None => CONFIG.get_or_init(|| RwLock::new(ConfigStore::default())),
             }
         }
     }
-=======
-                None => {
-                    CONFIG.get_or_init(|| RwLock::new(ConfigStore::default()))
-                }
-            }
-        }
-    }
 
-    static mut IPC_SVR_SOCK_NAME: SmolStr =
-        SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCK_NAME);
 
-    // static mut IPC_CLT_SOCK_NAME: SmolStr =
-    //     SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME);
-    pub(crate) fn server_ipc_sock_name() -> &'static str {
-        unsafe { IPC_SVR_SOCK_NAME.as_str() }
-    }
-
-    // pub(crate) fn client_ipc_sock_name() -> &'static str {
-    //     unsafe { IPC_CLT_SOCK_NAME.as_str() }
-    // }
-
-    pub(crate) fn set_server_ipc_sock_name(server_socket_name: SmolStr) {
-        unsafe {
-            IPC_SVR_SOCK_NAME = server_socket_name;
-        }
-    }
-
-<<<<<<< HEAD
-    pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
-        unsafe {
-            IPC_CLT_SOCK_NAME = client_socket_name;
-        }
-    }
->>>>>>> c22d847 (	modified:   Cargo.lock)
-=======
-    // pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
-    //     unsafe {
-    //         IPC_CLT_SOCK_NAME = client_socket_name;
-    //     }
-    // }
->>>>>>> 4253718 (	modified:   share_daemon/src/config.rs)
 }
 
 #[cfg(test)]
