@@ -10,7 +10,6 @@ pub mod consts {
     pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
     pub const PIAR_SEP: char = ' ';
     pub const PAIR_SEP: char = ':';
-    pub const DEFAULT_LISTENER_PORT: u16 = 10020;
     pub(crate) const GET_HOME_DIR_FAILED: &str =
         "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
 
@@ -22,20 +21,18 @@ pub mod consts {
 
     pub const FILE_NAME_LENGTH_LIMIT: usize = 260;
 
-    pub const DEFAULT_CLIENT_IPC_SOCK_NAME: &str = "share-client.sock";
-    pub const DEFAULT_SERVER_IPC_SOCK_NAME: &str = "share-server.sock";
+    pub const DEFAULT_IPC_SOCK_NAME: &str = "share.sock";
     pub const UNSPECIFIED_PORT: u16 = 0;
     pub const PORT_TEST_BOUND: u16 = 1000;
 
     pub const DEFAULT_LISTENER_ADDR: SocketAddr =
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_LISTENER_PORT);
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 10020);
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
 
     pub const LINE_SEP: &str = "\r\n";
-    // pub const NEWLINE: char = '\n';
     pub const ASCII_SPACE: char = ' ';
 
-    pub const PATHS_NUM_PER_REQUEST: usize = crate::config::DEFAULT_NUM_WORKERS as usize - 1;
+    pub const PATHS_NUM_PER_REQUEST: usize = 4;
 
     pub const FILE_PATH_LIMIT: u64 = 500;
 
@@ -45,11 +42,9 @@ pub mod consts {
 mod global {
     use std::sync::OnceLock;
 
-    use smol_str::SmolStr;
     use tokio::sync::RwLock;
 
     use crate::config::ConfigStore;
-    use crate::consts;
 
     pub(crate) async fn config_store() -> &'static RwLock<ConfigStore> {
         static mut CONFIG: OnceLock<RwLock<ConfigStore>> = OnceLock::new();
@@ -65,37 +60,10 @@ mod global {
                     }
                     conf_store_lock
                 }
-                None => {
-                    CONFIG.get_or_init(|| RwLock::new(ConfigStore::default()))
-                }
+                None => CONFIG.get_or_init(|| RwLock::new(ConfigStore::default())),
             }
         }
     }
-
-    static mut IPC_SVR_SOCK_NAME: SmolStr =
-        SmolStr::new_inline(consts::DEFAULT_SERVER_IPC_SOCK_NAME);
-
-    // static mut IPC_CLT_SOCK_NAME: SmolStr =
-    //     SmolStr::new_inline(consts::DEFAULT_CLIENT_IPC_SOCK_NAME);
-    pub(crate) fn server_ipc_sock_name() -> &'static str {
-        unsafe { IPC_SVR_SOCK_NAME.as_str() }
-    }
-
-    // pub(crate) fn client_ipc_sock_name() -> &'static str {
-    //     unsafe { IPC_CLT_SOCK_NAME.as_str() }
-    // }
-
-    pub(crate) fn set_server_ipc_sock_name(server_socket_name: SmolStr) {
-        unsafe {
-            IPC_SVR_SOCK_NAME = server_socket_name;
-        }
-    }
-
-    // pub(crate) fn set_client_ipc_sock_name(client_socket_name: SmolStr) {
-    //     unsafe {
-    //         IPC_CLT_SOCK_NAME = client_socket_name;
-    //     }
-    // }
 }
 
 #[cfg(test)]

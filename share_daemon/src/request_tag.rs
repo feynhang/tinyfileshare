@@ -11,7 +11,6 @@ pub mod client {
 }
 pub mod remote {
     pub const PORT: &str = "PORT";
-    // pub const REG_ME: &str = "REG_ME";
 }
 
 

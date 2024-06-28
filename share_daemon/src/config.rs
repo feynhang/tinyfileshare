@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -33,28 +33,13 @@ impl ConfigStore {
     pub(crate) fn default() -> Self {
         Self {
             current_config: Config::default(),
-            config_path: Self::default_config_path(),
+            config_path: Config::default_config_path(),
             last_modified: LastModified::Unknown,
         }
     }
 
-    pub(crate) fn set_config_path(&mut self, path: PathBuf) {
-        self.config_path = path
-    }
-    
-    pub(crate) fn default_config_path() -> PathBuf {
-        let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
-        path.push(consts::DEFAULT_CONFIG_DIR_NAME);
-        if !path.exists() {
-            std::fs::create_dir_all(&path).unwrap();
-        }
-        path.push(consts::DEFAULT_CONFIG_FILE_NAME);
-        path
-    }
-
-    pub(crate) fn set_config(&mut self, config: Config) -> anyhow::Result<()> {
-        self.current_config = config.checked().1;
-        Ok(())
+    pub(crate) fn set_config(&mut self, config: Config) {
+        self.current_config = config;
     }
 
     pub(crate) fn update_to_file(&mut self) -> anyhow::Result<()> {
@@ -74,12 +59,10 @@ impl ConfigStore {
             self.current_config = c;
             self.last_modified = t;
         } else {
-            self.last_modified = self.write_to_file(&self.config_path)?;
+            self.last_modified = self.current_config.write_to_file(&self.config_path)?;
         }
         Ok(())
     }
-
-
 }
 
 impl Deref for ConfigStore {
@@ -101,7 +84,7 @@ pub struct Config {
     listener_addr: SocketAddr,
     num_workers: u8,
     receive_dir: PathBuf,
-    // client_sock_name: Option<SmolStr>,
+    ipc_socket_name: SmolStr,
     reg_hosts: HashMap<SmolStr, SocketAddr>,
 }
 
@@ -111,6 +94,7 @@ impl Default for Config {
             listener_addr: consts::DEFAULT_LISTENER_ADDR,
             num_workers: DEFAULT_NUM_WORKERS,
             receive_dir: Self::default_recv_dir().to_owned(),
+            ipc_socket_name: consts::DEFAULT_IPC_SOCK_NAME.into(),
             reg_hosts: HashMap::new(),
         }
     }
@@ -118,7 +102,7 @@ impl Default for Config {
 
 impl Config {
     // immutable self
-    
+
     pub(crate) fn write_to_file(&self, p: &Path) -> anyhow::Result<LastModified> {
         let mut f = File::create(p)?;
         f.write_all(toml::to_string(&self)?.as_bytes())?;
@@ -137,10 +121,6 @@ impl Config {
         self.reg_hosts.get(hostname)
     }
 
-    // pub(crate) fn client_socket_name(&self) -> Option<SmolStr> {
-    //     self.client_sock_name.clone()
-    // }
-    
     pub(crate) fn listener_addr(&self) -> SocketAddr {
         self.listener_addr
     }
@@ -153,6 +133,10 @@ impl Config {
         self.num_workers
     }
 
+    pub(crate) fn ipc_socket_name(&self) -> &str {
+        &self.ipc_socket_name
+    }
+
     // mut self
 
     pub(crate) fn register_host(
@@ -163,30 +147,45 @@ impl Config {
         self.reg_hosts.insert(hostname.into(), socket_addr)
     }
 
-    // pub(crate) fn set_client_sock_name(&mut self, name: SmolStr) {
-    //     self.client_sock_name = Some(name);
-    // }
-    
-    pub(crate) fn set_receive_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
-        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
+    pub(crate) fn set_ipc_socket_name(&mut self, name: SmolStr) {
+        self.ipc_socket_name = name;
     }
 
-    pub(crate) fn set_num_workers(&mut self, n: u8) {
-        self.num_workers = Self::check_num_workers(n).1;
+    pub(crate) fn set_save_dir<P: Into<PathBuf>>(&mut self, file_save_dir: P) {
+        self.receive_dir = Self::check_receive_dir(file_save_dir.into()).1;
     }
 
     pub(crate) fn set_listener_addr(&mut self, addr: SocketAddr) {
         self.listener_addr = addr;
+    }
+    
+    pub(crate) fn set_num_workers(&mut self, n: u8) {
+        self.num_workers = Self::check_num_workers(n).1;
+    }
+
+    pub(crate) fn set_listener_ip(&mut self, ip: IpAddr) {
+        self.listener_addr.set_ip(ip);
     }
 
     pub(crate) fn set_listener_port(&mut self, port: u16) {
         self.listener_addr.set_port(port);
     }
 
-
     // static
     
-    pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(config_path: P) -> std::io::Result<File> {
+    pub(crate) fn default_config_path() -> PathBuf {
+        let mut path = dirs::home_dir().expect(consts::GET_HOME_DIR_FAILED);
+        path.push(consts::DEFAULT_CONFIG_DIR_NAME);
+        if !path.exists() {
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        path.push(consts::DEFAULT_CONFIG_FILE_NAME);
+        path
+    }
+
+    pub(crate) fn open_config_file_readonly<P: AsRef<Path>>(
+        config_path: P,
+    ) -> std::io::Result<File> {
         File::open(config_path)
     }
 
@@ -244,10 +243,11 @@ impl Config {
 
     #[inline(always)]
     pub(crate) fn check_hostname_valid(hostname: &str) -> bool {
-        hostname.len() <= consts::HOST_NAME_LENGTH_LIMIT
+        let len = hostname.len();
+        len > 0 && len <= consts::HOST_NAME_LENGTH_LIMIT
     }
 
-    fn checked(mut self) -> (bool, Self) {
+    pub(crate) fn checked(mut self) -> (bool, Self) {
         let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
         let (recv_dir_ok, recv_dir) = Self::check_receive_dir(self.receive_dir);
         let mut hostname_ok = true;
@@ -292,15 +292,13 @@ mod config_tests {
 
     #[test]
     fn config_to_file_test() {
-        let res = get_config_store().write_to_file(&ConfigStore::default_config_path());
+        let res = get_config_store().write_to_file(&Config::default_config_path());
         assert!(res.is_ok());
     }
 
     #[test]
     fn config_from_file_test() {
-        let res = Config::from_file(
-            ConfigStore::default_config_path(),
-        );
+        let res = Config::from_file(Config::default_config_path());
         assert!(res.is_ok());
         let (c, l) = res.unwrap();
         println!("Config: {:?}\n lastmodified: {:?}", c, l);

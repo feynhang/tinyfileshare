@@ -223,40 +223,37 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
         let mut remote_reader = BufReader::new(remote_read_half).take(first_line_length_limit);
         let mut line = String::new();
         if remote_reader.read_line(&mut line).await? != 0 {
-            if let Some((reqeust_tag, arg)) = line.trim().split_once(consts::PIAR_SEP) {
-                match reqeust_tag {
-                    request_tag::remote::PORT => {
-                        if config_lock.read().await.check_addr_registered(peer_addr) {
-                            if let Ok(expected_port) = arg.parse::<u16>() {
-                                if let Some(l) = create_receive_listener(expected_port).await {
-                                    let actual_port = l.local_addr()?.port();
-                                    tokio::spawn(receive_files(l, peer_addr.ip()));
-                                    remote_writer
-                                        .write_line(smol_str::format_smolstr!(
-                                            "{} {}",
-                                            response_tag::remote::PORT_CONFIRM,
-                                            actual_port
-                                        ))
-                                        .await?;
-                                } else {
-                                    remote_writer
-                                        .write_line(response_tag::remote::NO_AVAILABLE_PORT)
-                                        .await?;
-                                }
+            if let Some((req_tag, arg)) = line.trim().split_once(consts::PIAR_SEP) {
+                if req_tag == request_tag::remote::PORT {
+                    if config_lock.read().await.check_addr_registered(peer_addr) {
+                        if let Ok(expected_port) = arg.parse::<u16>() {
+                            if let Some(l) = create_receive_listener(expected_port).await {
+                                let actual_port = l.local_addr()?.port();
+                                tokio::spawn(receive_files(l, peer_addr.ip()));
+                                remote_writer
+                                    .write_line(smol_str::format_smolstr!(
+                                        "{} {}",
+                                        response_tag::remote::PORT_CONFIRM,
+                                        actual_port
+                                    ))
+                                    .await?;
                             } else {
                                 remote_writer
-                                    .write_line(response_tag::remote::INVALID_PORT)
+                                    .write_line(response_tag::remote::NO_AVAILABLE_PORT)
                                     .await?;
                             }
                         } else {
                             remote_writer
-                                .write_line(response_tag::remote::UNREGISTERED_HOST)
+                                .write_line(response_tag::remote::INVALID_PORT)
                                 .await?;
                         }
-
-                        return Ok(());
+                    } else {
+                        remote_writer
+                            .write_line(response_tag::remote::UNREGISTERED_HOST)
+                            .await?;
                     }
-                    _ => (),
+
+                    return Ok(());
                 }
             }
         }
