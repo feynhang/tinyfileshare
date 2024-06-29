@@ -147,9 +147,10 @@ impl Config {
     pub(crate) fn update_from<P: AsRef<Path>>(&mut self, path: P) -> anyhow::Result<LastModified> {
         let p = path.as_ref();
         let (c, t) = Config::from_file(p)?;
-        let (config_ok, config) = c.checked();
+        let (config_ok, mut config) = c.checked();
         Ok(
             if !config_ok || config.listener_addr != self.listener_addr {
+                config.set_listener_addr(self.listener_addr);
                 config.write_to_file(p)?
             } else {
                 t
@@ -266,9 +267,8 @@ impl Config {
         let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
         let (recv_dir_ok, recv_dir) = Self::check_files_save_dir(self.save_dir);
         let hosts_count = self.reg_hosts.len();
-        self.reg_hosts.retain(|name, addr| {
-            Self::check_hostname_valid(name) && Self::check_addr_valid(*addr)
-        });
+        self.reg_hosts
+            .retain(|name, addr| Self::check_hostname_valid(name) && Self::check_addr_valid(*addr));
         let checked_ok = num_workers_ok && recv_dir_ok && self.reg_hosts.len() == hosts_count;
         self.num_workers = num_workers;
         self.save_dir = recv_dir;
