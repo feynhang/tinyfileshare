@@ -1,12 +1,20 @@
+pub mod common;
 pub mod config;
 pub mod request_tag;
-pub mod response_tag;
 pub mod server;
 
 pub(crate) mod handler;
 
 pub mod consts {
-    use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::Duration};
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        time::Duration,
+    };
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    pub const FILE_SIZE_LIMIT: u64 = 10 * GB;
     pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
     pub const MIN_PORT: u16 = 3000;
@@ -43,10 +51,7 @@ mod global {
                 Some(conf_store_lock) => {
                     let mut config_store = conf_store_lock.write().await;
                     if let Err(e) = config_store.try_update_from_file() {
-                        log::error!(
-                            "Try to update from config file failed! Detail: {}",
-                            e
-                        );
+                        log::error!("Try to update from config file failed! Detail: {}", e);
                     }
                     conf_store_lock
                 }

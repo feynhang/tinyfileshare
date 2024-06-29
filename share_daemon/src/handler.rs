@@ -1,15 +1,16 @@
 use std::{
+    fs::File,
+    io::{Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
 
 use smol_str::ToSmolStr;
 use tokio::{
-    fs::File,
     io::{
         AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
     },
-    net::{tcp::OwnedWriteHalf, TcpListener, TcpStream},
+    net::{TcpListener, TcpStream},
     sync::RwLock,
 };
 
@@ -30,7 +31,11 @@ where
     }
 }
 
-use crate::{config::Config, consts, global, request_tag, response_tag};
+use crate::{
+    common::{LocalResponse, RemoteResponse, Response, StartLine},
+    config::Config,
+    consts, global, request_tag,
+};
 
 pub(crate) async fn handle_local<S>(mut local_stream: S) -> std::io::Result<()>
 where
@@ -61,7 +66,7 @@ where
                             let path = PathBuf::from(line.trim());
                             if !path.is_file() {
                                 local_stream
-                                    .write_line(response_tag::local::ANY_PATH_INVALID)
+                                    .write_line(LocalResponse::AnyPathInvalid.to_str_unchecked())
                                     .await?;
                                 return Ok(());
                             }
@@ -75,7 +80,7 @@ where
                         }
                     } else {
                         local_stream
-                            .write_line(response_tag::local::UNREGISTERED_HOSTNAME)
+                            .write_line(LocalResponse::UnregisteredHostname.to_str_unchecked())
                             .await?;
                         return Ok(());
                     }
@@ -84,7 +89,7 @@ where
                     if let Some((hostname, addr_str)) = arg.trim().split_once(consts::PAIR_SEP) {
                         if !Config::check_hostname_valid(hostname) {
                             local_stream
-                                .write_line(response_tag::common::INVALID_HOSTNAME)
+                                .write_line(Response::InvalidHostname.to_str_unchecked())
                                 .await?;
                             return Ok(());
                         }
@@ -92,20 +97,20 @@ where
                             if let Ok(option_ip) = try_register_to_local(hostname, addr).await {
                                 if let Some(replaced) = option_ip {
                                     local_stream
-                                        .write_line(smol_str::format_smolstr!(
-                                            "{} {}",
-                                            response_tag::local::REPLACED_ADDR,
-                                            replaced
-                                        ))
+                                        .write_line(
+                                            LocalResponse::ReplacedAddress(replaced).to_smolstr(),
+                                        )
                                         .await?;
                                 } else {
                                     local_stream
-                                        .write_line(response_tag::common::REG_SUCCEEDED)
+                                        .write_line(Response::RegisterSucceeded.to_str_unchecked())
                                         .await?;
                                 }
                             } else {
                                 local_stream
-                                    .write_line(response_tag::local::REG_LOCAL_FAILED)
+                                    .write_line(
+                                        LocalResponse::LocalRegisterFailed.to_str_unchecked(),
+                                    )
                                     .await?;
                             }
                             return Ok(());
@@ -117,7 +122,7 @@ where
         }
     }
     local_stream
-        .write_line(response_tag::remote::INVALID_REQUEST)
+        .write_line(RemoteResponse::InvalidRequest.to_str_unchecked())
         .await?;
     Ok(())
 }
@@ -160,66 +165,45 @@ where
             .await?;
         let mut line = String::with_capacity(50);
         let mut remote_reader = BufReader::with_capacity(128, remote_read_half).take(50);
-        if remote_reader.read_line(&mut line).await? != 0 {
-            let mut resp_parts = line.trim().split(consts::STARTLINE_SEP);
-            match resp_parts.next().unwrap() {
-                response_tag::remote::UNREGISTERED_HOST => {
-                    local_write_half
-                        .write_line(response_tag::local::REMOTE_UNREGISTERED)
-                        .await?
-                }
-                response_tag::remote::NO_AVAILABLE_PORT => {
-                    local_write_half
-                        .write_line(response_tag::local::REMOTE_NO_AVAILABLE_PORT)
-                        .await?
-                }
-                response_tag::remote::PORT_CONFIRM if resp_parts.clone().count() == 2 => {
-                    if let Ok(port) = resp_parts.next().unwrap().parse::<u16>() {
-                        send_files(
-                            local_write_half,
-                            SocketAddr::from((remote_addr.ip(), port)),
-                            files_paths,
-                        )
-                        .await?;
-                    } else {
-                        reply_unexpected_resp(&mut local_write_half, remote_write_half).await?;
-                    }
-                }
-                _ => reply_unexpected_resp(&mut local_write_half, remote_write_half).await?,
+        remote_reader.read_line(&mut line).await?;
+        match line.parse::<RemoteResponse>() {
+            Ok(RemoteResponse::UnregisteredHost) => {
+                local_write_half
+                    .write_line(LocalResponse::RemoteUnregistered.to_str_unchecked())
+                    .await?
             }
-            return Ok(());
+            Ok(RemoteResponse::NoAvailablePort) => {
+                local_write_half
+                    .write_line(LocalResponse::RemoteNoAvailablePort.to_str_unchecked())
+                    .await?
+            }
+            Ok(RemoteResponse::PortConfirm(port)) => {
+                send_files(
+                    local_write_half,
+                    SocketAddr::from((remote_addr.ip(), port)),
+                    files_paths,
+                )
+                .await?
+            }
+            _ => {
+                local_write_half
+                    .write_line(LocalResponse::UnexpectedRemoteResponse.to_str_unchecked())
+                    .await?;
+                remote_write_half
+                    .write_line(Response::UnexpectedResponse.to_str_unchecked())
+                    .await?;
+            }
         }
-        reply_unexpected_resp(&mut local_write_half, remote_write_half).await?;
+        return Ok(());
     } else {
         local_write_half
-            .write_line(smol_str::format_smolstr!(
-                "{} {}",
-                response_tag::local::UNREACHABLE_ADDRESS,
-                remote_addr
-            ))
+            .write_line(LocalResponse::UnreachableAddress(remote_addr).to_smolstr())
             .await?;
     }
 
     Ok(())
 }
 
-async fn reply_unexpected_resp<S>(
-    local_write_half: &mut S,
-    mut write_half: OwnedWriteHalf,
-) -> tokio::io::Result<()>
-where
-    S: AsyncWrite + Unpin,
-{
-    local_write_half
-        .write_line(response_tag::local::UNEXPECTED_REMOTE_RESP_TAG)
-        .await?;
-    write_half
-        .write_line(response_tag::common::UNEXPECTED_RESP)
-        .await?;
-    write_half.flush().await?;
-    write_half.forget();
-    Ok(())
-}
 
 pub(crate) async fn handle_remote<S>(
     mut remote_stream: S,
@@ -256,25 +240,23 @@ where
                                     }
                                 });
                                 remote_stream
-                                    .write_line(smol_str::format_smolstr!(
-                                        "{} {}",
-                                        response_tag::remote::PORT_CONFIRM,
-                                        actual_port
-                                    ))
+                                    .write_line(
+                                        RemoteResponse::PortConfirm(actual_port).to_smolstr(),
+                                    )
                                     .await?;
                             } else {
                                 remote_stream
-                                    .write_line(response_tag::remote::NO_AVAILABLE_PORT)
+                                    .write_line(RemoteResponse::NoAvailablePort.to_str_unchecked())
                                     .await?;
                             }
                         } else {
                             remote_stream
-                                .write_line(response_tag::remote::INVALID_PORT)
+                                .write_line(RemoteResponse::InvalidPort.to_str_unchecked())
                                 .await?;
                         }
                     } else {
                         remote_stream
-                            .write_line(response_tag::remote::UNREGISTERED_HOST)
+                            .write_line(RemoteResponse::UnregisteredHost.to_str_unchecked())
                             .await?;
                     }
                     return Ok(());
@@ -283,7 +265,7 @@ where
         }
     }
     if let Err(e) = remote_stream
-        .write_line(response_tag::remote::INVALID_REQUEST)
+        .write_line(RemoteResponse::InvalidRequest.to_str_unchecked())
         .await
     {
         log::error!("A remote connection maybe closed! Detail: {}", e);
@@ -317,16 +299,26 @@ where
         } else {
             name_cow.to_smolstr()
         };
-
-        let mut f = File::open(&p).await?;
-        let file_size = f.metadata().await.unwrap().len();
+        let mut f = File::open(&p)?;
+        let file_size = if let Some(size) = f.metadata().ok().map(|m| m.len()) {
+            if size > consts::FILE_SIZE_LIMIT {
+                log::warn!(
+                    "The size of file exceeds limit(10GB), file: \"{}\"",
+                    p.to_string_lossy()
+                );
+                continue;
+            }
+            Some(size)
+        } else {
+            None
+        };
         dest_writer
-            .write_line(smol_str::format_smolstr!("{}:{}", name, file_size))
+            .write_line(LocalResponse::FileInfo(name, file_size).to_smolstr())
             .await?;
         let mut size_count = 0;
         loop {
             let mut buf = [0_u8; consts::FILE_TRANS_BUF_SIZE];
-            let read_size = f.read(&mut buf).await?;
+            let read_size = f.read(&mut buf)?;
             if read_size == 0 {
                 break;
             }
@@ -336,12 +328,14 @@ where
                 .await?;
             dest_writer.flush().await?;
             local_write_half
-                .write_line(smol_str::format_smolstr!(
-                    "{} {}:{}",
-                    response_tag::local::PROGRESS,
-                    name_cow,
-                    size_count as f64 / file_size as f64
-                ))
+                .write_line(
+                    LocalResponse::Progress(
+                        file_size
+                            .map(|size| size_count as f64 / size as f64)
+                            .unwrap_or(-1.0),
+                    )
+                    .to_smolstr(),
+                )
                 .await?;
         }
         dest_writer.write_all(consts::LINE_SEP.as_bytes()).await?;
@@ -352,37 +346,32 @@ where
     dest_writer
         .write_line(request_tag::send_flag::SEND_END)
         .await?;
-    let mut reader = BufReader::new(remote_read_half).take(10);
+    let mut dest_reader = BufReader::new(remote_read_half).take(StartLine::LENGTH_LIMIT);
     let mut line = String::new();
-    if reader.read_line(&mut line).await? != 0 {
+    if dest_reader.read_line(&mut line).await? != 0 {
         let mut resp_parts = line.split(consts::STARTLINE_SEP);
-        if resp_parts.next().unwrap() == response_tag::remote::FILES_RECEIVED
-            && resp_parts.clone().count() == 2
-        {
-            if let Ok(recv_count) = resp_parts.next().unwrap().parse::<usize>() {
-                if recv_count == files_paths.len() {
+        match resp_parts.next().unwrap().parse::<RemoteResponse>() {
+            Ok(RemoteResponse::FilesReceived(recv_count)) if resp_parts.clone().count() == 2 => {
+                if recv_count == files_paths.len() as u8 {
                     local_write_half
-                        .write_line(response_tag::local::ALL_FILES_SENT_SUCCEEDED)
+                        .write_line(LocalResponse::AllFilesSucceeded.to_str_unchecked())
                         .await?;
                     return Ok(());
                 } else {
                     local_write_half
-                        .write_line(smol_str::format_smolstr!(
-                            "{} {}",
-                            response_tag::local::FILES_SENT_SUCCEEDED,
-                            recv_count
-                        ))
+                        .write_line(LocalResponse::FilesSucceeded(recv_count).to_smolstr())
                         .await?;
                     return Ok(());
                 }
             }
+            _ => (),
         }
     }
     local_write_half
-        .write_line(response_tag::local::UNEXPECTED_SEND_RESPONSE)
+        .write_line(LocalResponse::UnexpectedSendResp.to_str_unchecked())
         .await?;
     dest_writer
-        .write_line(response_tag::local::UNEXPECTED_SEND_RESPONSE)
+        .write_line(LocalResponse::UnexpectedSendResp.to_str_unchecked())
         .await?;
     Ok(())
 }
@@ -398,7 +387,7 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
             if reader.read_line(&mut line).await? != 0
                 && line.trim() == request_tag::send_flag::SEND_START
             {
-                let mut files_count: u32 = 0;
+                let mut files_count: u8 = 0;
                 line.clear();
                 reader.set_limit(4);
                 let mut recv_dir = global::config_store()
@@ -419,11 +408,7 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
                             break;
                         }
                         write_half
-                            .write_line(smol_str::format_smolstr!(
-                                "{} {}",
-                                response_tag::remote::FILES_RECEIVED,
-                                files_count
-                            ))
+                            .write_line(RemoteResponse::FilesReceived(files_count).to_smolstr())
                             .await?;
                         return Ok(());
                     }
@@ -439,7 +424,7 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
                     }
                     reader.set_limit(file_size_res.unwrap() as u64);
                     recv_dir.push(name);
-                    let f = RwLock::new(File::create(&recv_dir).await?);
+                    let f = RwLock::new(File::create(&recv_dir)?);
                     let mut file_writer = f.write().await;
                     loop {
                         let mut buf = [0; consts::FILE_TRANS_BUF_SIZE];
@@ -447,33 +432,26 @@ async fn receive_files(listener: TcpListener, send_host_ip: IpAddr) -> std::io::
                         if read_size == 0 {
                             break;
                         }
-                        file_writer
-                            .write_all(unsafe { buf.get_unchecked(0..read_size) })
-                            .await?;
+                        file_writer.write_all(unsafe { buf.get_unchecked(0..read_size) })?;
                     }
-                    file_writer.flush().await?;
+                    file_writer.flush()?;
                     files_count += 1;
                     line.clear();
                 }
                 if files_count > 0 {
                     write_half
-                        .write_line(smol_str::format_smolstr!(
-                            "{} {}:{}",
-                            response_tag::remote::UNEXPECTED_END_FLAG,
-                            response_tag::remote::FILES_RECEIVED,
-                            files_count
-                        ))
+                        .write_line(RemoteResponse::UnexpectedEndFlag(files_count).to_smolstr())
                         .await?;
                     return Ok(());
                 }
             }
             write_half
-                .write_line(response_tag::remote::INVALID_REQUEST)
+                .write_line(RemoteResponse::InvalidRequest.to_str_unchecked())
                 .await?;
             return Ok(());
         }
         stream
-            .write_line(response_tag::remote::INVALID_REQUEST)
+            .write_line(RemoteResponse::InvalidRequest.to_str_unchecked())
             .await?;
         tokio::task::yield_now().await;
     }
