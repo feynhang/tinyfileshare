@@ -14,7 +14,7 @@ use smol_str::SmolStr;
 use crate::consts;
 pub(crate) const GET_HOME_DIR_FAILED: &str =
     "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
-pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
+
 pub(crate) const MAX_WORKERS: u8 = 120;
 
 #[derive(Debug)]
@@ -58,11 +58,11 @@ impl ConfigStore {
                         return Ok(());
                     }
                 }
-            },
+            }
             LastModified::Unsaved => {
                 self.last_modified = self.current_config.write_to_file(&self.config_path)?;
                 return Ok(());
-            },
+            }
             _ => (),
         }
         self.last_modified = self.current_config.update_from(&self.config_path)?;
@@ -97,7 +97,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             listener_addr: consts::DEFAULT_LISTENER_ADDR,
-            num_workers: DEFAULT_NUM_WORKERS,
+            num_workers: consts::DEFAULT_NUM_WORKERS,
             save_dir: Self::default_save_dir().to_owned(),
             ipc_socket_name: consts::DEFAULT_IPC_SOCK_NAME.into(),
             reg_hosts: HashMap::new(),
@@ -228,7 +228,7 @@ impl Config {
 
     fn check_num_workers(num: u8) -> (bool, u8) {
         if num == 0 || num > MAX_WORKERS {
-            (false, DEFAULT_NUM_WORKERS)
+            (false, consts::DEFAULT_NUM_WORKERS)
         } else {
             (true, num)
         }
@@ -266,15 +266,9 @@ impl Config {
         let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
         let (recv_dir_ok, recv_dir) = Self::check_files_save_dir(self.save_dir);
         let hosts_count = self.reg_hosts.len();
-        self.reg_hosts = self
-            .reg_hosts
-            .into_iter()
-            .filter(|(name, addr)| {
-                let is_name_valid = Self::check_hostname_valid(&name);
-                let is_addr_valid = Self::check_addr_valid(*addr);
-                is_name_valid && is_addr_valid
-            })
-            .collect();
+        self.reg_hosts.retain(|name, addr| {
+            Self::check_hostname_valid(name) && Self::check_addr_valid(*addr)
+        });
         let checked_ok = num_workers_ok && recv_dir_ok && self.reg_hosts.len() == hosts_count;
         self.num_workers = num_workers;
         self.save_dir = recv_dir;

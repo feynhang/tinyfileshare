@@ -26,6 +26,7 @@ pub mod consts {
     pub const NUMBER_PATHS_PER_REQUEST: usize = 4;
     pub const FILE_TRANS_BUF_SIZE: usize = 8192;
     pub const FILE_PATH_LIMIT: u64 = 500;
+    pub const DEFAULT_NUM_WORKERS: u8 = 4;
 }
 
 mod global {

@@ -122,6 +122,7 @@ impl Server {
 
     pub fn start(self) -> anyhow::Result<()> {
         tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(self.config.num_workers() as usize + 1)
             .enable_io()
             .build()
             .unwrap()

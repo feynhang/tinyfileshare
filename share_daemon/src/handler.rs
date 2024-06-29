@@ -3,14 +3,12 @@ use std::{
     path::PathBuf,
 };
 
-use interprocess::local_socket::{
-    tokio::{SendHalf, Stream as LocalStream},
-    traits::tokio::Stream,
-};
 use smol_str::ToSmolStr;
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    io::{
+        AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
+    },
     net::{tcp::OwnedWriteHalf, TcpListener, TcpStream},
     sync::RwLock,
 };
@@ -21,22 +19,27 @@ pub trait WriteLine {
 
 impl<W> WriteLine for W
 where
-    W: AsyncWriteExt + ?Sized + std::marker::Unpin,
+    W: AsyncWriteExt + ?Sized + Unpin,
 {
     async fn write_line<S: AsRef<str>>(&mut self, str: S) -> std::io::Result<()> {
-        self.write_all(str.as_ref().as_bytes()).await?;
-        self.write_all(consts::LINE_SEP.as_bytes()).await?;
+        self.write_all(
+            smol_str::format_smolstr!("{}{}", str.as_ref(), consts::LINE_SEP).as_bytes(),
+        )
+        .await?;
         self.flush().await
     }
 }
 
 use crate::{config::Config, consts, global, request_tag, response_tag};
 
-pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
-    let (local_read_half, mut local_write_half) = stream.split();
-
+pub(crate) async fn handle_local<S>(mut local_stream: S) -> std::io::Result<()>
+where
+    S: AsyncWrite + AsyncRead + Unpin,
+    for<'a> &'a mut S: AsyncRead,
+{
+    // let mut local_write_half = stream.as_tokio_async_write();
     let mut local_reader =
-        tokio::io::BufReader::new(local_read_half).take(consts::HOST_NAME_LENGTH_LIMIT as u64 + 50);
+        BufReader::new(&mut local_stream).take(consts::HOST_NAME_LENGTH_LIMIT as u64 + 50);
     let mut line = String::new();
     if local_reader.read_line(&mut line).await? != 0 {
         if let Some((command, arg)) = line.trim().split_once(consts::STARTLINE_SEP) {
@@ -57,7 +60,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                         {
                             let path = PathBuf::from(line.trim());
                             if !path.is_file() {
-                                local_write_half
+                                local_stream
                                     .write_line(response_tag::local::ANY_PATH_INVALID)
                                     .await?;
                                 return Ok(());
@@ -67,11 +70,11 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                             line.clear();
                         }
                         if !recv_paths.is_empty() {
-                            handle_file_send(*host, local_write_half, recv_paths).await?;
+                            handle_file_send(*host, local_stream, recv_paths).await?;
                             return Ok(());
                         }
                     } else {
-                        local_write_half
+                        local_stream
                             .write_line(response_tag::local::UNREGISTERED_HOSTNAME)
                             .await?;
                         return Ok(());
@@ -80,7 +83,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                 request_tag::local::REG => {
                     if let Some((hostname, addr_str)) = arg.trim().split_once(consts::PAIR_SEP) {
                         if !Config::check_hostname_valid(hostname) {
-                            local_write_half
+                            local_stream
                                 .write_line(response_tag::common::INVALID_HOSTNAME)
                                 .await?;
                             return Ok(());
@@ -88,7 +91,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                         if let Ok(addr) = <SocketAddr as std::str::FromStr>::from_str(addr_str) {
                             if let Ok(option_ip) = try_register_to_local(hostname, addr).await {
                                 if let Some(replaced) = option_ip {
-                                    local_write_half
+                                    local_stream
                                         .write_line(smol_str::format_smolstr!(
                                             "{} {}",
                                             response_tag::local::REPLACED_ADDR,
@@ -96,12 +99,12 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
                                         ))
                                         .await?;
                                 } else {
-                                    local_write_half
+                                    local_stream
                                         .write_line(response_tag::common::REG_SUCCEEDED)
                                         .await?;
                                 }
                             } else {
-                                local_write_half
+                                local_stream
                                     .write_line(response_tag::local::REG_LOCAL_FAILED)
                                     .await?;
                             }
@@ -113,7 +116,7 @@ pub(crate) async fn handle_local(stream: LocalStream) -> std::io::Result<()> {
             }
         }
     }
-    local_write_half
+    local_stream
         .write_line(response_tag::remote::INVALID_REQUEST)
         .await?;
     Ok(())
@@ -138,11 +141,14 @@ fn checked_expected_port(port: u16) -> u16 {
     }
 }
 
-async fn handle_file_send(
+async fn handle_file_send<S>(
     remote_addr: SocketAddr,
-    mut local_write_half: SendHalf,
+    mut local_write_half: S,
     files_paths: Vec<PathBuf>,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     if let Ok(remote_stream) = TcpStream::connect(remote_addr).await {
         let (remote_read_half, mut remote_write_half) = remote_stream.into_split();
         remote_write_half
@@ -197,14 +203,16 @@ async fn handle_file_send(
     Ok(())
 }
 
-async fn reply_unexpected_resp(
-    local_write_half: &mut SendHalf,
+async fn reply_unexpected_resp<S>(
+    local_write_half: &mut S,
     mut write_half: OwnedWriteHalf,
-) -> tokio::io::Result<()> {
+) -> tokio::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     local_write_half
         .write_line(response_tag::local::UNEXPECTED_REMOTE_RESP_TAG)
         .await?;
-    local_write_half.flush().await?;
     write_half
         .write_line(response_tag::common::UNEXPECTED_RESP)
         .await?;
@@ -213,19 +221,29 @@ async fn reply_unexpected_resp(
     Ok(())
 }
 
-pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> anyhow::Result<()> {
-    let (remote_read_half, mut remote_writer) = stream.into_split();
-    let config_lock = global::config_store().await;
-    if remote_read_half.readable().await.is_ok() {
-        let first_line_length_limit = (request_tag::remote::PORT.len()
-            + std::mem::size_of::<u16>()
-            + consts::LINE_SEP.len()) as u64;
-        let mut remote_reader = BufReader::new(remote_read_half).take(first_line_length_limit);
-        let mut line = String::new();
-        if remote_reader.read_line(&mut line).await? != 0 {
+pub(crate) async fn handle_remote<S>(
+    mut remote_stream: S,
+    peer_addr: SocketAddr,
+) -> anyhow::Result<()>
+where
+    S: AsyncWrite + AsyncRead + Unpin,
+    for<'a> &'a mut S: AsyncRead,
+{
+    let first_line_length_limit = (request_tag::remote::PORT.len()
+        + std::mem::size_of::<u16>()
+        + consts::LINE_SEP.len()) as u64;
+    let mut remote_reader = BufReader::new(&mut remote_stream).take(first_line_length_limit);
+    let mut line = String::new();
+    if let Ok(size) = remote_reader.read_line(&mut line).await {
+        if size != 0 {
             if let Some((req_tag, arg)) = line.trim().split_once(consts::STARTLINE_SEP) {
                 if req_tag == request_tag::remote::PORT {
-                    if config_lock.read().await.check_addr_registered(peer_addr) {
+                    if global::config_store()
+                        .await
+                        .read()
+                        .await
+                        .check_addr_registered(peer_addr)
+                    {
                         if let Ok(expected_port) = arg.parse::<u16>() {
                             if let Some(l) = create_receive_listener(expected_port).await {
                                 let actual_port = l.local_addr()?.port();
@@ -237,7 +255,7 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                                         );
                                     }
                                 });
-                                remote_writer
+                                remote_stream
                                     .write_line(smol_str::format_smolstr!(
                                         "{} {}",
                                         response_tag::remote::PORT_CONFIRM,
@@ -245,40 +263,42 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                                     ))
                                     .await?;
                             } else {
-                                remote_writer
+                                remote_stream
                                     .write_line(response_tag::remote::NO_AVAILABLE_PORT)
                                     .await?;
                             }
                         } else {
-                            remote_writer
+                            remote_stream
                                 .write_line(response_tag::remote::INVALID_PORT)
                                 .await?;
                         }
                     } else {
-                        remote_writer
+                        remote_stream
                             .write_line(response_tag::remote::UNREGISTERED_HOST)
                             .await?;
                     }
-
                     return Ok(());
                 }
             }
         }
-    } else if remote_writer.writable().await.is_ok() {
-        remote_writer
-            .write_line(response_tag::remote::INVALID_REQUEST)
-            .await?;
-    } else {
-        log::warn!("A remote connection maybe closed!");
+    }
+    if let Err(e) = remote_stream
+        .write_line(response_tag::remote::INVALID_REQUEST)
+        .await
+    {
+        log::error!("A remote connection maybe closed! Detail: {}", e);
     }
     Ok(())
 }
 
-async fn send_files(
-    mut local_write_half: SendHalf,
+async fn send_files<S>(
+    mut local_write_half: S,
     dest_addr: SocketAddr,
     files_paths: Vec<PathBuf>,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let dest_stream = TcpStream::connect(dest_addr).await?;
     let (remote_read_half, remote_write_half) = dest_stream.into_split();
     let mut dest_writer = BufWriter::new(remote_write_half);
@@ -474,4 +494,184 @@ async fn create_receive_listener(port: u16) -> Option<tokio::net::TcpListener> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod handler_tests {
+    use std::{cell::RefCell, sync::Arc, task::Poll};
+
+    use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
+
+    use super::WriteLine;
+
+    #[derive(Debug)]
+    struct MockStream {
+        data_s2c: Vec<u8>,
+        data_c2s: Vec<u8>,
+    }
+
+    impl MockStream {
+        pub fn new() -> Self {
+            Self {
+                data_c2s: vec![],
+                data_s2c: vec![],
+            }
+        }
+
+        pub fn into_split(self) -> (ClientStream, ServerStream) {
+            println!("split inner");
+            let arc = Arc::new(RefCell::new(self));
+            (
+                ClientStream {
+                    inner_stream: arc.clone(),
+                },
+                ServerStream { inner_stream: arc },
+            )
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct ClientStream {
+        inner_stream: Arc<RefCell<MockStream>>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct ServerStream {
+        inner_stream: Arc<RefCell<MockStream>>,
+    }
+
+    impl Unpin for MockStream {}
+
+    impl AsyncWrite for ClientStream {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<Result<usize, std::io::Error>> {
+            let mut inner_stream = self.inner_stream.as_ref().borrow_mut();
+            inner_stream.data_c2s = Vec::from(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncRead for ClientStream {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let mut inner_stream = self.inner_stream.as_ref().borrow_mut();
+            if inner_stream.data_s2c.len() > 0 {
+                let size = usize::min(inner_stream.data_s2c.len(), buf.remaining());
+                buf.put_slice(&inner_stream.data_s2c[..size]);
+                inner_stream.data_s2c.drain(..size);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for ServerStream {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize, std::io::Error>> {
+            let mut inner_stream = self.inner_stream.as_ref().borrow_mut();
+            inner_stream.data_s2c = Vec::from(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncRead for ServerStream {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let mut inner_stream = self.inner_stream.as_ref().borrow_mut();
+            if inner_stream.data_c2s.len() > 0 {
+                let size = usize::min(inner_stream.data_c2s.len(), buf.remaining());
+                buf.put_slice(&inner_stream.data_c2s[..size]);
+                inner_stream.data_c2s.drain(..size);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    const START_LINE: &str = "GET / HTTP/1.1";
+    const HELLO_RESPONSE: &str = "<html><head></head><body><h1>Hello</h1></body></html>";
+
+    async fn simple_handle_connection(mut server_stream: ServerStream) -> std::io::Result<()> {
+        println!("into simple_handle_connection");
+        let mut line = String::new();
+        let mut reader = BufReader::new(&mut server_stream).take(20);
+        let read_size = reader.read_line(&mut line).await?;
+        println!("read a line finished, line = {}", line.trim());
+        if read_size != 0 && line.trim() == START_LINE.trim() {
+            println!("read a line and its equals START_LINE: \"{}\"", START_LINE);
+            println!("write content =  {}", HELLO_RESPONSE);
+            server_stream.write_line(HELLO_RESPONSE).await?;
+            println!("write response finished!");
+            println!(
+                "inner stream data_s2c = {}",
+                String::from_utf8_lossy(
+                    server_stream
+                        .inner_stream
+                        .as_ref()
+                        .borrow()
+                        .data_s2c
+                        .as_slice()
+                )
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn simple_handle_test() {
+        println!("before initial");
+        let stream = MockStream::new();
+        println!("stream initial finished");
+        let (mut c, s) = stream.into_split();
+        println!("split stream succeeded...");
+        let mut res = c.write_line(START_LINE).await;
+        assert!(res.is_ok());
+        println!(
+            "client write startline finished, inner data = {}",
+            String::from_utf8_lossy(c.inner_stream.as_ref().borrow().data_c2s.as_slice())
+        );
+        res = simple_handle_connection(s).await;
+        assert!(res.is_ok());
+        let mut client_reader = BufReader::new(c).take(128);
+        let mut resp = String::new();
+        let read_res = client_reader.read_to_string(&mut resp).await;
+        println!("read result = {}", &resp);
+        assert!(read_res.is_ok());
+        assert_eq!(resp.trim(), HELLO_RESPONSE);
+    }
+}
