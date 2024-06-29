@@ -231,7 +231,10 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                                 let actual_port = l.local_addr()?.port();
                                 tokio::spawn(async move {
                                     if let Err(e) = receive_files(l, peer_addr.ip()).await {
-                                        log::error!("Error occurred in `receive_files`, error detail: {}", e);
+                                        log::error!(
+                                            "Error occurred in `receive_files`, error detail: {}",
+                                            e
+                                        );
                                     }
                                 });
                                 remote_writer
@@ -261,10 +264,13 @@ pub(crate) async fn handle_remote(stream: TcpStream, peer_addr: SocketAddr) -> a
                 }
             }
         }
+    } else if remote_writer.writable().await.is_ok() {
+        remote_writer
+            .write_line(response_tag::remote::INVALID_REQUEST)
+            .await?;
+    } else {
+        log::warn!("A remote connection maybe closed!");
     }
-    remote_writer
-        .write_line(response_tag::remote::INVALID_REQUEST)
-        .await?;
     Ok(())
 }
 
@@ -459,7 +465,7 @@ async fn create_receive_listener(port: u16) -> Option<tokio::net::TcpListener> {
             return Some(l);
         }
     }
-    for p in port..1 {
+    for p in 3000..port {
         if let Ok(l) = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, p)).await {
             return Some(l);
         }

@@ -231,7 +231,7 @@ fn main() {
             clap::Arg::new(arg_id::PORT)
                 .short('p')
                 .long(arg_id::PORT)
-                .value_parser(clap::value_parser!(u16).range(3000..)),
+                .value_parser(clap::value_parser!(u16).range(fshare_server::consts::MIN_PORT as i64..)),
         )
         .arg(
             clap::Arg::new(arg_id::ADDR)

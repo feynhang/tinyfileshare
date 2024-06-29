@@ -6,12 +6,16 @@ pub mod server;
 pub(crate) mod handler;
 
 pub mod consts {
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::Duration};
     pub const DEFAULT_CONFIG_DIR_NAME: &str = ".tinyfileshare";
     pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
+    pub const MIN_PORT: u16 = 3000;
     const DEFAULT_PORT: u16 = 10020;
+    pub const HOST_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
     pub const DEFAULT_LISTENER_ADDR: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_PORT);
+    pub const UNSPECIFIED_LISTENER_ADDR: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
     pub const DEFAULT_IPC_SOCK_NAME: &str = "share.sock";
     pub const HOST_NAME_LENGTH_LIMIT: usize = 20;
     pub const LINE_SEP: &str = "\r\n";
@@ -39,7 +43,7 @@ mod global {
                     let mut config_store = conf_store_lock.write().await;
                     if let Err(e) = config_store.try_update_from_file() {
                         log::error!(
-                            "Update config in config_store failed and ignored it! Detail: {}",
+                            "Try to update from config file failed! Detail: {}",
                             e
                         );
                     }

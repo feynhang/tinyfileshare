@@ -13,7 +13,7 @@ use smol_str::SmolStr;
 
 use crate::consts;
 pub(crate) const GET_HOME_DIR_FAILED: &str =
-        "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
+    "Unexpected: get home dir failed! Maybe you are in an unsupported platform!";
 pub(crate) const DEFAULT_NUM_WORKERS: u8 = 5;
 pub(crate) const MAX_WORKERS: u8 = 120;
 
@@ -27,7 +27,8 @@ pub(crate) struct ConfigStore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LastModified {
     LastModTime(SystemTime),
-    Unknown,
+    Unsupported,
+    Unsaved,
 }
 
 impl ConfigStore {
@@ -35,7 +36,7 @@ impl ConfigStore {
         Self {
             current_config: Config::default(),
             config_path: Config::default_config_path(),
-            last_modified: LastModified::Unknown,
+            last_modified: LastModified::Unsaved,
         }
     }
 
@@ -50,18 +51,21 @@ impl ConfigStore {
 
     pub(crate) fn try_update_from_file(&mut self) -> anyhow::Result<()> {
         let f = Config::open_config_file_readonly(&self.config_path)?;
-        if let LastModified::LastModTime(lastmod_time) = self.last_modified {
-            if let Ok(modified_time) = f.metadata()?.modified() {
-                if modified_time == lastmod_time {
-                    return Ok(());
+        match self.last_modified {
+            LastModified::LastModTime(last_mod_time) => {
+                if let Ok(mod_time) = f.metadata()?.modified() {
+                    if mod_time == last_mod_time {
+                        return Ok(());
+                    }
                 }
-            }
-            let (c, t) = Config::from_file(&self.config_path)?;
-            self.current_config = c;
-            self.last_modified = t;
-        } else {
-            self.last_modified = self.current_config.write_to_file(&self.config_path)?;
+            },
+            LastModified::Unsaved => {
+                self.last_modified = self.current_config.write_to_file(&self.config_path)?;
+                return Ok(());
+            },
+            _ => (),
         }
+        self.last_modified = self.current_config.update_from(&self.config_path)?;
         Ok(())
     }
 }
@@ -111,7 +115,7 @@ impl Config {
         if let Ok(last_modified) = f.metadata()?.modified() {
             return Ok(LastModified::LastModTime(last_modified));
         }
-        Ok(LastModified::Unknown)
+        Ok(LastModified::Unsupported)
     }
 
     pub(crate) fn ipc_socket_name(&self) -> &str {
@@ -139,6 +143,19 @@ impl Config {
     }
 
     // mutable self
+
+    pub(crate) fn update_from<P: AsRef<Path>>(&mut self, path: P) -> anyhow::Result<LastModified> {
+        let p = path.as_ref();
+        let (c, t) = Config::from_file(p)?;
+        let (config_ok, config) = c.checked();
+        Ok(
+            if !config_ok || config.listener_addr != self.listener_addr {
+                config.write_to_file(p)?
+            } else {
+                t
+            },
+        )
+    }
 
     pub(crate) fn register_host(
         &mut self,
@@ -200,7 +217,7 @@ impl Config {
             } else if let Ok(last_modified) = f.metadata()?.modified() {
                 LastModified::LastModTime(last_modified)
             } else {
-                LastModified::Unknown
+                LastModified::Unsupported
             };
 
             Ok((config, modified))
@@ -241,24 +258,24 @@ impl Config {
         len > 0 && len <= consts::HOST_NAME_LENGTH_LIMIT
     }
 
+    fn check_addr_valid(addr: SocketAddr) -> bool {
+        std::net::TcpStream::connect(addr).is_ok()
+    }
+
     pub(crate) fn checked(mut self) -> (bool, Self) {
         let (num_workers_ok, num_workers) = Self::check_num_workers(self.num_workers);
         let (recv_dir_ok, recv_dir) = Self::check_files_save_dir(self.save_dir);
-        let mut hostname_ok = true;
+        let hosts_count = self.reg_hosts.len();
         self.reg_hosts = self
             .reg_hosts
             .into_iter()
-            .map(|(mut name, addr)| {
-                if !Self::check_hostname_valid(&name) {
-                    if hostname_ok {
-                        hostname_ok = false;
-                    }
-                    name = name[0..consts::HOST_NAME_LENGTH_LIMIT].into();
-                }
-                (name, addr)
+            .filter(|(name, addr)| {
+                let is_name_valid = Self::check_hostname_valid(&name);
+                let is_addr_valid = Self::check_addr_valid(*addr);
+                is_name_valid && is_addr_valid
             })
             .collect();
-        let checked_ok = num_workers_ok && recv_dir_ok && hostname_ok;
+        let checked_ok = num_workers_ok && recv_dir_ok && self.reg_hosts.len() == hosts_count;
         self.num_workers = num_workers;
         self.save_dir = recv_dir;
         (checked_ok, self)
