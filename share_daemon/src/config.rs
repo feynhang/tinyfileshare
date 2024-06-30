@@ -147,15 +147,15 @@ impl Config {
     pub(crate) fn update_from<P: AsRef<Path>>(&mut self, path: P) -> anyhow::Result<LastModified> {
         let p = path.as_ref();
         let (c, t) = Config::from_file(p)?;
-        let (config_ok, mut config) = c.checked();
-        Ok(
-            if !config_ok || config.listener_addr != self.listener_addr {
-                config.set_listener_addr(self.listener_addr);
-                config.write_to_file(p)?
-            } else {
-                t
-            },
-        )
+        let (mut config_ok, mut config) = c.checked();
+        config_ok = config_ok && config.listener_addr == self.listener_addr;
+        Ok(if !config_ok {
+            config.listener_addr = self.listener_addr;
+            *self = config;
+            self.write_to_file(p)?
+        } else {
+            t
+        })
     }
 
     pub(crate) fn register_host(
